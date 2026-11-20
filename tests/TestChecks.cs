@@ -284,6 +284,12 @@ internal static class TestChecks
             Require(guide.Text == "Job Guide · This round" && catalog.Rows.Count == 9 &&
                 ((string)catalog.Rows[0].Cells[1].Value).Contains("ICE WALL BREAK Finder") &&
                 (string)catalog.Rows[5].Cells[2].Value == "1 · 0 done", "job type catalog with round counts");
+            Require(JobCatalog.Types.All(jobType => !jobType.Color.IsEmpty) &&
+                JobCatalog.Types.Where(jobType => jobType.Removes).All(jobType => jobType.Color == Palette.Danger) &&
+                JobCatalog.Find("Log Download").Color == Palette.Success && JobCatalog.Find("File Download").Color == Palette.Success &&
+                JobCatalog.Types.Select(jobType => jobType.Color).Distinct().Count() == 6 &&
+                catalog.Rows.Cast<DataGridViewRow>().All(row => row.Cells[0].Style.ForeColor == JobCatalog.Types[row.Index].Color),
+                "each job family has a color in the catalog");
             Require(grid.Rows.Count == 4 && grid.Rows[1].Tag == wipe && (string)grid.Rows[3].Cells[JobGuideWindow.ColServer].Value == "Downloads" &&
                 guide.IsGroupStart(0) && !guide.IsGroupStart(1) && guide.IsGroupStart(2) && guide.IsGroupStart(3), "grid shows the route grouped by server");
 
@@ -405,6 +411,22 @@ internal static class TestChecks
                     "Decrypt & Extract card still imports when OCR reads the ampersand as 8");
             }
         }
+        using (var decryptionCard = new Bitmap(1200, 448))
+        {
+            var lines = new List<OcrTextLine>
+            {
+                new OcrTextLine("File Decryption", new RectangleF(143, 45, 192, 26)),
+                new OcrTextLine("File Decryption", new RectangleF(458, 269, 129, 18))
+            };
+            Func<Bitmap, List<string>> readDecryption = image => image.Width == 900
+                ? new List<string> { "File Decryption" }
+                : image.Width == 300 ? new List<string> { "N/A", "File Decryption", "N/A" }
+                : new List<string> { "archive_1001.a9b2c" };
+            JobEntry entry = JobGuideWindow.RecognizeCards(decryptionCard, readDecryption, image => lines).Single();
+            Require(entry != null && entry.Type.Name == "File Decryption" && entry.Server == "" &&
+                entry.Access == JobAccess.Unknown && entry.Targets.SequenceEqual(new[] { "archive_1001.a9b2c" }),
+                "a repeated condition value does not split a File Decryption card");
+        }
         using (var logCard = new Bitmap(1200, 420))
         {
             Func<Bitmap, List<string>> readLog = image =>
@@ -418,6 +440,57 @@ internal static class TestChecks
             Require(log != null && log.Type.Name == "Log Download" && log.Server == "RM7-E1L3" &&
                 log.Access == JobAccess.Grant && log.Targets.SequenceEqual(new[] { "Session expired for user root", "audit.log" }),
                 "log import reads complete titles from the target area without instructions");
+        }
+        VerifyBatchCardImport();
+    }
+
+    private static void VerifyBatchCardImport()
+    {
+        Func<string, string, Task<Bitmap>> pick = (chinese, english) =>
+        {
+            var image = new Bitmap(1200, 1260);
+            using (Graphics graphics = Graphics.FromImage(image))
+            {
+                graphics.FillRectangle(Brushes.Red, 0, 0, 1200, 420);
+                graphics.FillRectangle(Brushes.Lime, 0, 420, 1200, 420);
+                graphics.FillRectangle(Brushes.Blue, 0, 840, 1200, 420);
+            }
+            return Task.FromResult(image);
+        };
+        Func<Bitmap, List<OcrTextLine>> layout = image => new List<OcrTextLine>
+        {
+            new OcrTextLine("File Download", new RectangleF(35, 870, 260, 22)),
+            new OcrTextLine("File Upload", new RectangleF(690, 540, 110, 18)), // Target text, not a card title.
+            new OcrTextLine("IP Cleanup", new RectangleF(35, 30, 210, 22)),
+            new OcrTextLine("IP Cleanup", new RectangleF(35, 450, 260, 22))
+        };
+        Func<Bitmap, List<string>> recognize = image =>
+        {
+            Color pixel = image.GetPixel(0, 0);
+            if (image.Width == 300)
+                return pixel.R == 255 ? new List<string> { "RM7-N4L2", "Access Grant" }
+                    : pixel.G == 255 ? new List<string> { "RM7-S4L3", "Access Acquisition" }
+                    : new List<string> { "Access Grant" };
+            return pixel.R == 255 ? new List<string> { "172.20.35.11" }
+                : pixel.G == 255 ? new List<string> { "100.64.2.118" } : new List<string> { "incomplete.bin" };
+        };
+        var round = new JobRound();
+        using (var guide = new JobGuideWindow(UiLanguage.English, round, pick, recognize, layout))
+        {
+            MethodInfo import = typeof(JobGuideWindow).GetMethod("ImportJob", BindingFlags.Instance | BindingFlags.NonPublic);
+            Finish((Task)import.Invoke(guide, null));
+            string status = Field<Label>(guide, "status").Text;
+            Require(round.Entries.Count == 2 && status.Contains("2, skipped 0 duplicates and 1 incomplete") &&
+                round.Entries[0].Server == "RM7-N4L2" && round.Entries[0].Access == JobAccess.Grant &&
+                round.Entries[0].Targets.SequenceEqual(new[] { "172.20.35.11" }) &&
+                round.Entries[1].Server == "RM7-S4L3" && round.Entries[1].Access == JobAccess.Acquisition &&
+                round.Entries[1].Targets.SequenceEqual(new[] { "100.64.2.118" }),
+                "stacked cards of the same type retain their own targets and access");
+            round.Entries[0].Done = true;
+            Finish((Task)import.Invoke(guide, null));
+            Require(round.Entries.Count == 2 && round.Entries[0].Done &&
+                Field<Label>(guide, "status").Text.Contains("0, skipped 2 duplicates and 1 incomplete"),
+                "batch reimport preserves completed jobs and reports skipped cards");
         }
     }
 

@@ -16,6 +16,18 @@ namespace GlyphFinder
         public OcrUnavailableException(string message, Exception inner = null) : base(message, inner) { }
     }
 
+    internal sealed class OcrTextLine
+    {
+        public readonly string Text;
+        public readonly RectangleF Bounds;
+
+        public OcrTextLine(string text, RectangleF bounds)
+        {
+            Text = text;
+            Bounds = bounds;
+        }
+    }
+
     // Text recognition with the OCR engine built into Windows 10 and 11 (Windows.Media.Ocr).
     // The WinRT types are bound at run time, so the build needs no Windows SDK and other systems get a clear message.
     internal static class WindowsOcr
@@ -83,6 +95,34 @@ namespace GlyphFinder
 
         public static List<string> Recognize(Bitmap image)
         {
+            return Recognize(image, (line, xScale, yScale) => (string)lineType.GetProperty("Text").GetValue(line, null));
+        }
+
+        public static List<OcrTextLine> RecognizeLines(Bitmap image)
+        {
+            Type wordType = WinRT("Windows.Media.Ocr.OcrWord");
+            if (wordType == null) throw new OcrUnavailableException("Windows text recognition word positions were not found.");
+            PropertyInfo boundingRect = wordType.GetProperty("BoundingRect");
+            return Recognize(image, (line, xScale, yScale) =>
+            {
+                RectangleF bounds = RectangleF.Empty;
+                foreach (object word in (IEnumerable)lineType.GetProperty("Words").GetValue(line, null))
+                {
+                    object rect = boundingRect.GetValue(word, null);
+                    Type type = rect.GetType();
+                    var area = new RectangleF(
+                        Convert.ToSingle(type.GetProperty("X").GetValue(rect, null)) * xScale,
+                        Convert.ToSingle(type.GetProperty("Y").GetValue(rect, null)) * yScale,
+                        Convert.ToSingle(type.GetProperty("Width").GetValue(rect, null)) * xScale,
+                        Convert.ToSingle(type.GetProperty("Height").GetValue(rect, null)) * yScale);
+                    bounds = bounds.IsEmpty ? area : RectangleF.Union(bounds, area);
+                }
+                return new OcrTextLine((string)lineType.GetProperty("Text").GetValue(line, null), bounds);
+            });
+        }
+
+        private static List<T> Recognize<T>(Bitmap image, Func<object, float, float, T> readLine)
+        {
             try
             {
                 Initialize();
@@ -101,16 +141,19 @@ namespace GlyphFinder
                     object buffer = asBuffer.Invoke(null, new object[] { bytes });
                     MethodInfo create = bitmapType.GetMethods().First(m => m.Name == "CreateCopyFromBuffer" && m.GetParameters().Length == 4);
                     object bitmap = create.Invoke(null, new[] { buffer, Enum.ToObject(formatType, 87), prepared.Width, prepared.Height });   // Bgra8
-                    object operation = engineType.GetMethod("RecognizeAsync").Invoke(engine, new[] { bitmap });
-                    var task = (Task)asTask.Invoke(null, new[] { operation });
-                    if (!task.Wait(15000)) throw new OcrUnavailableException("Text recognition timed out.");
-                    object result = task.GetType().GetProperty("Result").GetValue(task, null);
-                    var lines = new List<string>();
-                    foreach (object line in (IEnumerable)resultType.GetProperty("Lines").GetValue(result, null))
-                        lines.Add((string)lineType.GetProperty("Text").GetValue(line, null));
-                    var disposable = bitmap as IDisposable;
-                    if (disposable != null) disposable.Dispose();
-                    return lines;
+                    using (var disposable = bitmap as IDisposable)
+                    {
+                        object operation = engineType.GetMethod("RecognizeAsync").Invoke(engine, new[] { bitmap });
+                        var task = (Task)asTask.Invoke(null, new[] { operation });
+                        if (!task.Wait(15000)) throw new OcrUnavailableException("Text recognition timed out.");
+                        object result = task.GetType().GetProperty("Result").GetValue(task, null);
+                        float xScale = (float)image.Width / prepared.Width;
+                        float yScale = (float)image.Height / prepared.Height;
+                        var lines = new List<T>();
+                        foreach (object line in (IEnumerable)resultType.GetProperty("Lines").GetValue(result, null))
+                            lines.Add(readLine(line, xScale, yScale));
+                        return lines;
+                    }
                 }
             }
             catch (TargetInvocationException ex)
@@ -180,7 +223,7 @@ namespace GlyphFinder
 
             float scale = Math.Min(3f, Math.Min((float)MaxDimension / w, (float)MaxDimension / h));
             scale = Math.Min(scale, h < 900 ? 2.5f : 1.5f);
-            if (scale <= 1.05f) return flat;
+            if (scale >= 1f && scale <= 1.05f) return flat;
             var large = new Bitmap(Math.Max(1, (int)(w * scale)), Math.Max(1, (int)(h * scale)), PixelFormat.Format32bppArgb);
             using (Graphics g = Graphics.FromImage(large))
             {

@@ -22,6 +22,7 @@ namespace GlyphFinder
         private readonly JobRound round;
         private readonly Func<string, string, Task<Bitmap>> pickImage;
         private readonly Func<Bitmap, List<string>> recognize;
+        private readonly Func<Bitmap, List<OcrTextLine>> recognizeLines;
         private UiLanguage language;
 
         private readonly TableLayoutPanel layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(14, 12, 14, 10) };
@@ -73,12 +74,14 @@ namespace GlyphFinder
         private int hoverRow = -1;
 
         internal JobGuideWindow(UiLanguage language, JobRound round, Func<string, string, Task<Bitmap>> pickImage = null,
-            Func<Bitmap, List<string>> recognize = null)
+            Func<Bitmap, List<string>> recognize = null, Func<Bitmap, List<OcrTextLine>> recognizeLines = null)
         {
             this.language = language;
             this.round = round;
             this.pickImage = pickImage;
             this.recognize = recognize ?? WindowsOcr.Recognize;
+            this.recognizeLines = recognizeLines ?? (recognize == null
+                ? (Func<Bitmap, List<OcrTextLine>>)WindowsOcr.RecognizeLines : null);
             serverBox = serverInput.Box;
             targetsBox = targetsInput.Box;
             noteBox = noteInput.Box;
@@ -353,11 +356,11 @@ namespace GlyphFinder
                         entry.Type.NeedsServer ? text : Palette.Muted, WrapText | TextFormatFlags.VerticalCenter);
                     break;
                 case ColType:
-                    Color dot = entry.Done ? Palette.Faint : entry.Type.Removes ? Palette.Accent : Palette.Primary;
+                    Color dot = entry.Done ? Palette.Blend(entry.Type.Color, Palette.Faint, 130) : entry.Type.Color;
                     using (var fill = new SolidBrush(dot)) g.FillEllipse(fill, inner.X, b.Y + b.Height / 2f - 3, 6, 6);
                     TextRenderer.DrawText(g, entry.Type.Name, entry.Done ? doneFont : Font,
                         new Rectangle(inner.X + 13, b.Y + 6, inner.Width - 13, b.Height - 12),
-                        entry.Done ? text : entry.Type.Removes ? Palette.Accent : text, WrapText | TextFormatFlags.VerticalCenter);
+                        entry.Done ? text : entry.Type.Color, WrapText | TextFormatFlags.VerticalCenter);
                     break;
                 case ColAccess:
                     if (!entry.Type.NeedsServer) break;
@@ -452,7 +455,8 @@ namespace GlyphFinder
             foreach (JobType type in JobCatalog.Types)
             {
                 int index = catalog.Rows.Add("     " + type.Name, "", "");
-                if (type.Removes) catalog.Rows[index].Cells[0].Style.ForeColor = Palette.Accent;
+                DataGridViewCellStyle style = catalog.Rows[index].Cells[0].Style;
+                style.ForeColor = style.SelectionForeColor = type.Color;
             }
             catalog.CellPainting += delegate(object sender, DataGridViewCellPaintingEventArgs e)
             {
@@ -460,7 +464,7 @@ namespace GlyphFinder
                 e.Paint(e.CellBounds, DataGridViewPaintParts.All);
                 JobType type = JobCatalog.Types[e.RowIndex];
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                using (var dot = new SolidBrush(type.Removes ? Palette.Accent : Palette.Primary))
+                using (var dot = new SolidBrush(type.Color))
                     e.Graphics.FillEllipse(dot, e.CellBounds.X + 12, e.CellBounds.Y + e.CellBounds.Height / 2f - 3, 6, 6);
                 e.Handled = true;
             };
@@ -691,32 +695,84 @@ namespace GlyphFinder
 
         private Task ImportJob()
         {
-            return ReadImage("框住一张展开的任务卡，包含标题和左右两栏", "Select one expanded job card, including the title and both columns.",
+            return ReadImage("框住一张或多张上下排列的展开任务卡，包含标题和左右两栏",
+                "Select one or more stacked, expanded job cards, including titles and both columns.",
                 image =>
                 {
-                    JobEntry entry = RecognizeCard(image, recognize);
-                    if (entry == null)
+                    List<JobEntry> entries = RecognizeCards(image, recognize, recognizeLines);
+                    int added = 0, duplicates = 0, incomplete = 0;
+                    foreach (JobEntry entry in entries)
                     {
-                        SetStatus(Translate("任务信息识别不完整。请重框整张任务卡，或手动添加。",
-                            "Could not read all job fields. Select the full expanded card or add the job manually."));
+                        if (entry == null) incomplete++;
+                        else if (TryRecord(entry)) added++;
+                        else duplicates++;
+                    }
+                    if (added == 0 && duplicates == 0)
+                    {
+                        SetStatus(Translate("任务信息识别不完整。请重新框选展开的任务卡，或手动添加。",
+                            "Could not read all job fields. Select the full expanded cards or add them manually."));
                         return;
                     }
-                    if (!TryRecord(entry)) return;
-                    SetStatus(string.Format(Translate("已导入 {0} · {1}。请核对列表中的目标。",
-                        "Imported {0} · {1}. Check the targets in the list."), entry.Type.Name, JobRound.GroupName(entry, language)));
+                    SetStatus(string.Format(Translate("新增 {0} 项，重复 {1} 项，信息不全 {2} 项。请核对列表。",
+                        "Added {0}, skipped {1} duplicates and {2} incomplete cards. Check the list."),
+                        added, duplicates, incomplete));
                 });
+        }
+
+        internal static List<JobEntry> RecognizeCards(Bitmap image, Func<Bitmap, List<string>> recognize,
+            Func<Bitmap, List<OcrTextLine>> recognizeLines)
+        {
+            if (image.Width < 80 || image.Height < 60 || recognizeLines == null)
+                return new List<JobEntry> { RecognizeCard(image, recognize) };
+
+            using (Bitmap titleStrip = image.Clone(new Rectangle(0, 0, image.Width * 3 / 4, image.Height), PixelFormat.Format32bppArgb))
+            {
+                // Card titles start near the left edge. The condition value in the
+                // info column can repeat the title, particularly for File Decryption.
+                var headings = recognizeLines(titleStrip)
+                    .Where(line => !line.Bounds.IsEmpty && line.Bounds.Left < image.Width / 4f)
+                    .Select(line => new { Type = JobRound.ReadCardType(line.Text), Bounds = line.Bounds })
+                    .Where(line => line.Type != null)
+                    .OrderBy(line => line.Bounds.Top)
+                    .ToList();
+                if (headings.Count < 2) return new List<JobEntry> { RecognizeCard(image, recognize) };
+
+                // Each card has the same top inset from its title. Use the first card's inset,
+                // capped at twice the title height in case the selection includes extra space.
+                float inset = Math.Min(headings[0].Bounds.Top, 2 * headings[0].Bounds.Height);
+                int[] starts = headings.Select(heading => Math.Max(0, (int)Math.Floor(heading.Bounds.Top - inset))).ToArray();
+                var entries = new List<JobEntry>();
+                for (int i = 0; i < headings.Count; i++)
+                {
+                    int bottom = i + 1 == headings.Count ? image.Height : starts[i + 1];
+                    if (bottom - starts[i] < 60)
+                    {
+                        entries.Add(null);
+                        continue;
+                    }
+                    using (Bitmap card = image.Clone(new Rectangle(0, starts[i], image.Width, bottom - starts[i]), PixelFormat.Format32bppArgb))
+                        entries.Add(RecognizeCardBody(card, headings[i].Type, recognize));
+                }
+                return entries;
+            }
         }
 
         internal static JobEntry RecognizeCard(Bitmap image, Func<Bitmap, List<string>> recognize)
         {
             if (image.Width < 80 || image.Height < 60) return null;
             int splitY = image.Height / 3;
-            int splitX = image.Width / 2;
-            int valuesX = image.Width / 4;
             JobType type;
             using (Bitmap heading = image.Clone(new Rectangle(0, 0, image.Width * 3 / 4, splitY), PixelFormat.Format32bppArgb))
                 type = JobRound.IdentifyCardType(recognize(heading));
             if (type == null) return null;
+            return RecognizeCardBody(image, type, recognize);
+        }
+
+        private static JobEntry RecognizeCardBody(Bitmap image, JobType type, Func<Bitmap, List<string>> recognize)
+        {
+            int splitY = image.Height / 3;
+            int splitX = image.Width / 2;
+            int valuesX = image.Width / 4;
 
             // Log titles can look like ordinary sentences. Exclude the instructions and Info button
             // from the right column before reading the target bands of a fully framed card.

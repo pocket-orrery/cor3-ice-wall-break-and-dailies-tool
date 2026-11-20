@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -15,12 +16,14 @@ namespace GlyphFinder
         public readonly string Name, Chinese, English;
         public readonly TargetKind Targets;
         public readonly bool Removes;
+        public readonly Color Color;
 
-        public JobType(string name, TargetKind targets, bool removes, string chinese, string english)
+        public JobType(string name, TargetKind targets, bool removes, Color color, string chinese, string english)
         {
             Name = name;
             Targets = targets;
             Removes = removes;
+            Color = color;
             Chinese = chinese;
             English = english;
         }
@@ -33,31 +36,31 @@ namespace GlyphFinder
         // Paraphrased from the ACT 3 - Jobs guide. Names match the market listing for lookup.
         public static readonly JobType[] Types =
         {
-            new JobType("File Decryption", TargetKind.None, false,
+            new JobType("File Decryption", TargetKind.None, false, Color.FromArgb(194, 163, 255),
                 "接单后打开 Downloads 里的加密文件，完成小游戏，再回市场交单。文件会自动删除。适用 ICE WALL BREAK 定位器。",
                 "Open the encrypted file in Downloads and solve the minigame with ICE WALL BREAK Finder, then turn in at the market."),
-            new JobType("IP Cleanup", TargetKind.Ip, true,
+            new JobType("IP Cleanup", TargetKind.Ip, true, Palette.Danger,
                 "连接指定服务器，在 Transit Access 删除列出的 IP。",
                 "Transit Access · Delete the listed IPs."),
-            new JobType("IP (adding)", TargetKind.Ip, false,
+            new JobType("IP (adding)", TargetKind.Ip, false, Palette.Primary,
                 "连接指定服务器，在 Transit Access 添加所需 IP。市场的任务详情里每个 IP 都有复制按钮。",
                 "Transit Access · Add the listed IPs. The market job details have a copy button for each IP."),
-            new JobType("Log Deletion", TargetKind.Log, true,
+            new JobType("Log Deletion", TargetKind.Log, true, Palette.Danger,
                 "连接指定服务器，在 Log 删除列出的日志。可能有重名，真正的那条通常大小与众不同（最小）。多条时动作要快。",
                 "Log · Delete the listed log. Names can repeat; the real one usually has the odd (smallest) size. Be quick with several."),
-            new JobType("Log Download", TargetKind.Log, false,
+            new JobType("Log Download", TargetKind.Log, false, Palette.Success,
                 "连接指定服务器，在 Log 找到并下载列出的日志。",
                 "Log · Download the listed log."),
-            new JobType("File Elimination", TargetKind.File, true,
+            new JobType("File Elimination", TargetKind.File, true, Palette.Danger,
                 "连接指定服务器，在 Files 删除列出的文件。",
                 "Files · Delete the listed file."),
-            new JobType("File Download", TargetKind.File, false,
+            new JobType("File Download", TargetKind.File, false, Palette.Success,
                 "连接指定服务器，在 Files 下载列出的文件。带锁图标的其实是 Download And Decrypt。",
                 "Files · Download the listed file. A padlock icon means it is a Download And Decrypt job."),
-            new JobType("File Upload", TargetKind.File, false,
+            new JobType("File Upload", TargetKind.File, false, Palette.Accent,
                 "连接指定服务器，在 Files 点上传，选择接单时放进 Downloads 的文件。",
                 "Files · Upload the file that was added to Downloads when you accepted the job."),
-            new JobType("Download And Decrypt", TargetKind.File, false,
+            new JobType("Download And Decrypt", TargetKind.File, false, Color.FromArgb(246, 167, 225),
                 "先在指定服务器的 Files 下载文件，再到 Downloads 打开并完成解密小游戏。",
                 "Files → Downloads · Download the file, open it in Downloads, and solve the minigame.")
         };
@@ -204,7 +207,7 @@ namespace GlyphFinder
             return new JobEntry { Type = selected, Server = servers[0], Access = access[0], Targets = targets };
         }
 
-        private static JobType ReadCardType(string line)
+        internal static JobType ReadCardType(string line)
         {
             string key = Regex.Replace(line.ToUpperInvariant(), @"[^A-Z0-9]", "");
             switch (key)

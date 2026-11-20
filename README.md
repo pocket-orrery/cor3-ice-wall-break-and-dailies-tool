@@ -8,14 +8,14 @@ Tired of squinting at ICE WALL BREAK during your daily tasks on [cor3.gg](https:
 
 ## Quick start
 
-1. Run `ICE-WALL-BREAK-Finder-v1.0.3.exe`.
+1. Run `ICE-WALL-BREAK-Finder-v1.0.4.exe`.
 2. In the File Decryption minigame, choose **Select**. Frame the target pattern area on the left, then the entire triangular board on the right.
 3. Keep both areas visible. A yellow outline marks a unique full match. Blue outlines mark the current leading candidates.
 
 ## Features
 
 - **ICE WALL BREAK** highlights candidate positions as tiles appear. The scan interval defaults to 100 ms.
-- **Job Guide**. Choose **Import from screenshot** to read an expanded job card, or enter the job details manually. Mark jobs done and copy a summary grouped by server. The round is cleared when you exit.
+- **Job Guide**. Choose **Import from screenshot** and frame one or more stacked, expanded job cards with their titles and both columns. The list reports added, duplicate, and incomplete cards. Job types are color-coded, with red for removals and green for downloads. You can also enter jobs manually, mark them done, and copy a summary grouped by server. The round is cleared when you exit.
 - **Daily Tasks** reads all rows of a pulse signal and decodes Morse or Binary. Log Integrity checks each line and lists every detected error. You can review the recognized text before using it.
 
 If the app reports a missing recognition language, go to **Settings → Time & language → Language & region** and add **English (United States)**.
@@ -29,7 +29,7 @@ If the app reports a missing recognition language, go to **Settings → Time & l
 <details>
 <summary>Job Guide and Daily Tasks</summary>
 
-![Job Guide showing the current round grouped by server](docs/screenshots/job-guide.png)
+![Job Guide showing color-coded job types and the screenshot import button](docs/screenshots/job-guide.png)
 
 ![Daily Tasks showing multiple errors in one log line](docs/screenshots/daily-tasks.png)
 
@@ -54,14 +54,14 @@ Run `.\build.ps1` in PowerShell on Windows. The script runs the checks and puts 
 
 ### 快速开始
 
-1. 运行 `ICE-WALL-BREAK-Finder-v1.0.3.exe`。
+1. 运行 `ICE-WALL-BREAK-Finder-v1.0.4.exe`。
 2. 进入文件解密小游戏，点 **框选**，先圈住左侧目标图形显示区，再圈住右侧整个三角棋盘。
 3. 保持两块区域可见。黄框表示唯一的全匹配，蓝框表示当前领先的候选位置。
 
 ### 功能
 
 - **ICE WALL BREAK** 随揭格进度自动更新候选位置，默认每 100 ms 扫描一次。
-- **工作手册**。点 **截图导入任务** 识别整张展开的任务卡，或手动输入任务信息。支持勾选完成和按服务器复制汇总，退出软件后清空本轮记录。
+- **工作手册**。点 **截图导入任务**，一次框选一张或多张上下排列的展开任务卡，包含标题和左右两栏。导入后显示新增、重复及信息不全的数量。工作类型用颜色区分，删除和清理为红色，下载为绿色。也可手动添加、勾选完成并按服务器复制汇总，退出软件后清空本轮记录。
 - **每日任务** 支持读取多行信号并解码 Morse 或 Binary，也能逐行检查日志并列出同一行的多个错误。截图识别的文字可在使用前核对。
 
 如果软件提示缺少识别语言，到 **设置 → 时间和语言 → 语言和区域**添加 **英语（美国）**。
@@ -75,7 +75,7 @@ Run `.\build.ps1` in PowerShell on Windows. The script runs the checks and puts 
 <details>
 <summary>工作手册和每日任务</summary>
 
-![工作手册按服务器分组显示本轮任务](docs/screenshots/job-guide-zh.png)
+![工作手册按颜色区分任务种类并显示截图导入按钮](docs/screenshots/job-guide-zh.png)
 
 ![每日任务在同一行日志中检查出多个错误](docs/screenshots/daily-tasks-zh.png)
 
