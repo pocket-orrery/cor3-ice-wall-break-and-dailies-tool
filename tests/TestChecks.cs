@@ -393,6 +393,26 @@ internal static class TestChecks
             new[] { "Download requested files", "trace-01.bin", "log.tar.gz" });
         Require(file != null && file.Server == "SRM7-N4L2" && file.Access == JobAccess.Acquisition &&
             file.Targets.SequenceEqual(new[] { "trace-01.bin", "log.tar.gz" }), "file card with a Chinese server label");
+        using (var croppedDownload = new Bitmap(1127, 424))
+        {
+            using (Graphics graphics = Graphics.FromImage(croppedDownload))
+            {
+                graphics.Clear(Color.FromArgb(18, 25, 34));
+                using (var divider = new Pen(Color.FromArgb(36, 45, 53)))
+                    graphics.DrawLine(divider, 601, 164, 601, 415);
+            }
+            Func<Bitmap, List<string>> readDownload = image =>
+            {
+                if (image.Width == 845) return new List<string> { "Data Download" };
+                if (image.Width == 320) return new List<string> { "RM7-N4L2", "Access Acquisition", "EXAMPLE-S01IS CORP" };
+                if (image.Width == 526) return new List<string> { "sample_1001.bin" };
+                return new List<string> { "RM7-N4", "Access Acquisiti" };
+            };
+            JobEntry download = JobGuideWindow.RecognizeCard(croppedDownload, readDownload);
+            Require(download != null && download.Type.Name == "File Download" && download.Server == "RM7-N4L2" &&
+                download.Access == JobAccess.Acquisition && download.Targets.SequenceEqual(new[] { "sample_1001.bin" }),
+                "a right-cropped Data Download card uses the visible column divider");
+        }
         Require(JobRound.ReadCard(JobCatalog.Find("IP Cleanup"), new[] { "Access Grant" }, new[] { "172.20.35.11" }) == null,
             "a card without a server is not added");
         using (var decryptCard = new Bitmap(1200, 420))

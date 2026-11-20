@@ -94,6 +94,7 @@ namespace GlyphFinder
             @"(?<![\w.-])[\w-]+(?:\.[\w-]+)+(?![\w-])");
         private static readonly Regex OcrIpv4 = new Regex(
             @"(?<![\w.])(?:[0-9OoØøIl]{1,3}\.){3}[0-9OoØøIl]{1,3}(?!\w|\.\w)");
+        private static readonly Regex SectorServer = new Regex(@"(?:^|-)[NESW]\d{1,2}L\d{1,2}(?:$|[- ])");
         private static readonly char[] Separators = { '\r', '\n', ',', ';', '，', '；', '、', '\t' };
 
         public readonly List<JobEntry> Entries = new List<JobEntry>();
@@ -199,6 +200,13 @@ namespace GlyphFinder
 
             string[] values = info.ToArray();
             var servers = values.Select(ReadCardServer).Where(server => server != null).Distinct().ToList();
+            // An OCR error can put digits in the provider name. Prefer the game's
+            // directional sector identifier when several values look like servers.
+            if (servers.Count > 1)
+            {
+                var sectorServers = servers.Where(server => SectorServer.IsMatch(server)).ToList();
+                if (sectorServers.Count > 0) servers = sectorServers;
+            }
             var access = values.SelectMany(line => Regex.Matches(line, @"\b(?:Access\s*)?(Acquisition|Grant)\b",
                     RegexOptions.IgnoreCase).Cast<Match>())
                 .Select(match => (JobAccess)Enum.Parse(typeof(JobAccess), match.Groups[1].Value, true))

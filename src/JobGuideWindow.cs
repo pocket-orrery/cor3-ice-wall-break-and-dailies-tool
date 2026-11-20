@@ -771,7 +771,7 @@ namespace GlyphFinder
         private static JobEntry RecognizeCardBody(Bitmap image, JobType type, Func<Bitmap, List<string>> recognize)
         {
             int splitY = image.Height / 3;
-            int splitX = image.Width / 2;
+            int splitX = type.NeedsServer ? FindCardDivider(image, splitY) : image.Width / 2;
             int valuesX = image.Width / 4;
 
             // Log titles can look like ordinary sentences. Exclude the instructions and Info button
@@ -782,6 +782,38 @@ namespace GlyphFinder
             using (Bitmap description = image.Clone(new Rectangle(splitX, descriptionTop, image.Width - splitX,
                 descriptionBottom - descriptionTop), PixelFormat.Format32bppArgb))
                 return JobRound.ReadCard(type, recognize(info), recognize(description));
+        }
+
+        private static int FindCardDivider(Bitmap image, int bodyTop)
+        {
+            // The game draws a thin vertical rule between the columns. A crop can cut
+            // off part of the right margin, so the rule may be away from the midpoint.
+            int bottom = image.Height * 9 / 10;
+            int step = Math.Max(2, image.Height / 180);
+            int samples = (bottom - bodyTop + step - 1) / step;
+            int bestX = image.Width / 2;
+            int bestCount = samples / 2;
+            for (int x = image.Width * 35 / 100; x < image.Width * 65 / 100; x++)
+            {
+                int count = 0;
+                for (int y = bodyTop; y < bottom; y += step)
+                {
+                    int neighbors = Math.Max(CardBrightness(image.GetPixel(x - 3, y)),
+                        CardBrightness(image.GetPixel(x + 3, y)));
+                    if (CardBrightness(image.GetPixel(x, y)) - neighbors >= 12) count++;
+                }
+                if (count > bestCount)
+                {
+                    bestX = x;
+                    bestCount = count;
+                }
+            }
+            return bestX;
+        }
+
+        private static int CardBrightness(Color pixel)
+        {
+            return pixel.R + pixel.G + pixel.B;
         }
 
         private void UpdateHeader()
