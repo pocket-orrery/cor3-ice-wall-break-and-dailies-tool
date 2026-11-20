@@ -68,7 +68,7 @@ Run `.\build.ps1` in PowerShell on Windows. The script runs the checks and puts 
 
 ### 界面截图
 
-![ICE WALL BREAK 定位器实时监看中的两个候选位置](docs/screenshots/finder.png)
+![ICE WALL BREAK 定位器实时监看时找到唯一完全匹配的位置](docs/screenshots/finder-zh.png)
 
 #### 工作手册和每日任务
 
