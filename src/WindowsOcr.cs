@@ -98,6 +98,12 @@ namespace GlyphFinder
             return Recognize(image, (line, xScale, yScale) => (string)lineType.GetProperty("Text").GetValue(line, null));
         }
 
+        internal static List<string> RecognizeLogCrop(Bitmap image, float scale)
+        {
+            return Recognize(image, (line, xScale, yScale) => (string)lineType.GetProperty("Text").GetValue(line, null),
+                source => PrepareLogCrop(source, scale));
+        }
+
         public static List<OcrTextLine> RecognizeLines(Bitmap image)
         {
             Type wordType = WinRT("Windows.Media.Ocr.OcrWord");
@@ -121,12 +127,12 @@ namespace GlyphFinder
             });
         }
 
-        private static List<T> Recognize<T>(Bitmap image, Func<object, float, float, T> readLine)
+        private static List<T> Recognize<T>(Bitmap image, Func<object, float, float, T> readLine, Func<Bitmap, Bitmap> prepare = null)
         {
             try
             {
                 Initialize();
-                using (Bitmap prepared = Prepare(image))
+                using (Bitmap prepared = (prepare ?? Prepare)(image))
                 {
                     var rect = new Rectangle(Point.Empty, prepared.Size);
                     BitmapData data = prepared.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
@@ -172,6 +178,24 @@ namespace GlyphFinder
                     throw new OcrUnavailableException("Windows text recognition is not available: " + ex.Message, ex);
                 throw;
             }
+        }
+
+        // The regular enlargement can make Windows OCR skip punctuation and digits in a small monospace timestamp.
+        private static Bitmap PrepareLogCrop(Bitmap source, float scale)
+        {
+            const int margin = 8;
+            scale = Math.Min(scale, Math.Min((float)(MaxDimension - 2 * margin) / source.Width,
+                (float)(MaxDimension - 2 * margin) / source.Height));
+            int width = Math.Max(1, (int)(source.Width * scale)), height = Math.Max(1, (int)(source.Height * scale));
+            var padded = new Bitmap(width + 2 * margin, height + 2 * margin, PixelFormat.Format32bppArgb);
+            using (Graphics g = Graphics.FromImage(padded))
+            {
+                g.Clear(Color.Black);
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.DrawImage(source, new Rectangle(margin, margin, width, height));
+            }
+            return padded;
         }
 
         // Dark text on white, with the game's scanline background removed and small text enlarged.

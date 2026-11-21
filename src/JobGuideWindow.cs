@@ -15,6 +15,7 @@ namespace GlyphFinder
     {
         internal const int ColDone = 0, ColServer = 1, ColType = 2, ColAccess = 3, ColTargets = 4, ColNote = 5;
         private const int EntryHeight = 280, FooterHeight = 108;
+        private const int IpCopySize = 14, IpCopySpace = 22;
         private static readonly Size NormalSize = new Size(960, 680);
         private static readonly Size CompactSize = new Size(540, 320);
         private static readonly Size NormalMinimum = new Size(720, 540);
@@ -281,6 +282,12 @@ namespace GlyphFinder
                 if (e.ColumnIndex == ColDone) ToggleDone(entry);
                 else if (e.ColumnIndex == ColAccess && entry.Type.NeedsServer)
                     ChangeAccess(entry, (JobAccess)(((int)entry.Access + 1) % JobCatalog.AccessNames.Length));
+                else if (e.ColumnIndex == ColTargets && entry.Type.Targets == TargetKind.Ip && !grid.IsCurrentCellInEditMode)
+                {
+                    var cell = new Rectangle(0, 0, grid.Columns[ColTargets].Width, grid.Rows[e.RowIndex].Height);
+                    string ip = IpAtCopyButton(entry, cell, e.Location);
+                    if (ip != null) CopyText(ip, Translate("已复制 ", "Copied ") + ip);
+                }
             };
             grid.CellDoubleClick += delegate(object sender, DataGridViewCellEventArgs e)
             {
@@ -316,6 +323,26 @@ namespace GlyphFinder
         }
 
         internal bool IsCompact { get { return compact; } }
+
+        private int IpLineHeight { get { return monoFont.Height + 3; } }
+
+        private Rectangle IpTargetLine(Rectangle cell, int index, int count)
+        {
+            int top = cell.Top + (cell.Height - count * IpLineHeight) / 2 + index * IpLineHeight;
+            return new Rectangle(cell.Left + 10, top, Math.Max(0, cell.Width - 16), IpLineHeight);
+        }
+
+        internal string IpAtCopyButton(JobEntry entry, Rectangle cell, Point cursor)
+        {
+            for (int i = 0; i < entry.Targets.Count; i++)
+            {
+                Rectangle line = IpTargetLine(cell, i, entry.Targets.Count);
+                if (line.Width < IpCopySize) return null;
+                line.Width = Math.Min(line.Width, IpCopySpace);
+                if (line.Contains(cursor)) return entry.Targets[i];
+            }
+            return null;
+        }
 
         private void PaintCell(object sender, DataGridViewCellPaintingEventArgs e)
         {
@@ -369,6 +396,20 @@ namespace GlyphFinder
                 case ColTargets:
                     if (entry.Targets.Count == 0)
                         TextRenderer.DrawText(g, "—", Font, inner, Palette.Faint, line1);
+                    else if (entry.Type.Targets == TargetKind.Ip)
+                    {
+                        Font font = entry.Done ? monoDoneFont : monoFont;
+                        Color icon = selected || e.RowIndex == hoverRow ? Palette.Primary : Palette.Muted;
+                        for (int i = 0; i < entry.Targets.Count; i++)
+                        {
+                            Rectangle line = IpTargetLine(b, i, entry.Targets.Count);
+                            if (line.Width < IpCopySize) break;
+                            var button = new Rectangle(line.Left, line.Top + (line.Height - IpCopySize) / 2, IpCopySize, IpCopySize);
+                            Theme.DrawGlyph(g, ButtonGlyph.Copy, button, icon);
+                            var value = new Rectangle(line.Left + IpCopySpace, line.Top, line.Width - IpCopySpace, line.Height);
+                            if (value.Width > 0) TextRenderer.DrawText(g, entry.Targets[i], font, value, text, line1);
+                        }
+                    }
                     else
                         TextRenderer.DrawText(g, string.Join(Environment.NewLine, entry.Targets), entry.Done ? monoDoneFont : monoFont,
                             Rectangle.Inflate(inner, 0, -6), text, WrapText | TextFormatFlags.VerticalCenter);
@@ -414,6 +455,13 @@ namespace GlyphFinder
                         int width = Math.Max(1, grid.Columns[column].Width - (column == ColType ? 29 : 16));
                         Font font = column == ColTargets ? (entry.Done ? monoDoneFont : monoFont) :
                             column == ColType && entry.Done ? doneFont : Font;
+                        if (column == ColTargets && entry.Type.Targets == TargetKind.Ip && entry.Targets.Count > 0)
+                        {
+                            height = Math.Max(height, entry.Targets.Count * IpLineHeight + 14);
+                            row.Cells[column].ToolTipText = Translate("点每行的图标可复制单个 IP。", "Click a copy icon to copy one IP.") +
+                                Environment.NewLine + text;
+                            continue;
+                        }
                         height = Math.Max(height, TextRenderer.MeasureText(text, font, new Size(width, 0), WrapText).Height + 14);
                         row.Cells[column].ToolTipText = text;
                     }
@@ -520,6 +568,7 @@ namespace GlyphFinder
             body.Controls.Add(targetsLabel, 0, 2);
             body.Controls.Add(noteLabel, 1, 2);
             targetsBox.Font = monoFont;
+            targetsBox.AcceptsReturn = true;
             body.Controls.Add(targetsInput, 0, 3);
             body.SetRowSpan(targetsInput, 2);
             body.Controls.Add(noteInput, 1, 3);
@@ -611,7 +660,7 @@ namespace GlyphFinder
             importJob.Text = Translate("截图导入任务", "Import from screenshot");
             tips.SetToolTip(importJob, Translate("框住一张展开的任务卡，将识别结果添加到本轮列表。",
                 "Select one expanded job card to add the recognized job to this round."));
-            tips.SetToolTip(addButton, Translate("回车添加 · Ctrl+回车换行", "Enter adds · Ctrl+Enter for a new line"));
+            tips.SetToolTip(targetsBox, Translate("按回车换行，也可粘贴多行。", "Press Enter for a new line or paste multiple lines."));
             tips.SetToolTip(readTargets, Translate("框选游戏里的目标文字，提取到目标栏供核对。", "Select the in-game text to fill the editable target box."));
             copy.Text = Translate("复制汇总", "Copy summary");
             delete.Text = Translate("删除", "Delete");
@@ -861,6 +910,10 @@ namespace GlyphFinder
         {
             refreshPending = false;
             JobEntry keep = selectAfterRefresh ?? SelectedEntry();
+            int first = grid.FirstDisplayedScrollingRowIndex;
+            JobEntry topEntry = first >= 0 ? grid.Rows[first].Tag as JobEntry : null;
+            bool selectingNew = selectAfterRefresh != null && !grid.Rows.Cast<DataGridViewRow>().Any(row => row.Tag == keep);
+            DataGridViewRow topRow = null, selectedRow = null;
             selectAfterRefresh = null;
             refreshing = true;
             hoverRow = -1;
@@ -879,14 +932,17 @@ namespace GlyphFinder
                         row.DefaultCellStyle.Font = doneFont;
                     }
                     if (!entry.Type.NeedsServer) row.Cells[ColServer].ReadOnly = true;
-                    if (entry == keep) grid.CurrentCell = row.Cells[ColTargets];
+                    if (entry == topEntry) topRow = row;
+                    if (entry == keep) selectedRow = row;
                 }
-                if (keep == null || !round.Entries.Contains(keep)) grid.ClearSelection();
+                if (selectedRow == null) grid.ClearSelection();
             }
             finally { refreshing = false; }
             emptyNote.Visible = round.Entries.Count == 0 && !showingGuide;
             grid.Visible = !showingGuide && round.Entries.Count > 0;
             SizeGridRows();
+            if (selectedRow != null) grid.CurrentCell = selectedRow.Cells[ColTargets];
+            if (!selectingNew && topRow != null && grid.Visible) grid.FirstDisplayedScrollingRowIndex = topRow.Index;
             for (int i = 0; i < JobCatalog.Types.Length; i++)
             {
                 JobType type = JobCatalog.Types[i];

@@ -240,6 +240,132 @@ namespace GlyphFinder
         public bool Ok { get { return Issues.Count == 0; } }
     }
 
+    internal static class LogReader
+    {
+        private static readonly Regex Event = new Regex(@"(?<!\S)[A-Za-z][A-Za-z0-9-]*(?=\s+(?:/[A-Za-z]|[\[']\s*(?:sector|status)\b))");
+        private static readonly Regex Timestamp = new Regex(@"^\[\s*(\d{1,2})\s*:\s*(\d{1,2})\s*:\s*(\d{1,2})\s*\]");
+        private static readonly Regex ImportableLine = new Regex(@"^\[[0-9]+(?:[:.\-][0-9]+){2}\]\s+\S");
+        private static readonly Regex FieldWithDamagedPunctuation = new Regex(@"(?<=\s)[\['/]\s*(sector|status)\s*[-—=]\s*(?=\w)");
+
+        // Check that OCR captured the timestamp and some log text. The validator checks the timestamp's format and range later.
+        public static bool CanImport(string line)
+        {
+            return ImportableLine.IsMatch(line);
+        }
+
+        private sealed class CapturedLine
+        {
+            public string Text, Body;
+            public Rectangle ClockArea;
+        }
+
+        public static List<string> Read(Bitmap image)
+        {
+            var clocks = new LogClockRecognizer(image);
+            var rows = WindowsOcr.RecognizeLines(image).OrderBy(line => line.Bounds.Top)
+                .Where(line => line.Text.IndexOf("SCAN LOGS OUTPUT", StringComparison.OrdinalIgnoreCase) < 0)
+                .Select(line => ReadLine(image, line, clocks)).ToList();
+
+            var result = new List<string>();
+            foreach (CapturedLine row in rows)
+            {
+                string text = row.Text;
+                if (!row.ClockArea.IsEmpty)
+                {
+                    string time = clocks.Read(row.ClockArea);
+                    if (time != null) text = time + " " + row.Body;
+                }
+                result.Add(text);
+            }
+            return result;
+        }
+
+        private static CapturedLine ReadLine(Bitmap image, OcrTextLine line, LogClockRecognizer clocks)
+        {
+            string text = LogValidator.FixOcr(line.Text);
+            Match type = Event.Match(text);
+            if (!type.Success || line.Bounds.IsEmpty) return new CapturedLine { Text = text };
+
+            // The game uses monospace log text. The timestamp and the space after it take eleven character positions.
+            string body = text.Substring(type.Index);
+            float pitch = line.Bounds.Width / (body.Length + (type.Index == 0 ? 0 : 11));
+            float start = line.Bounds.Left - (type.Index == 0 ? 11 * pitch : 0);
+            int left = Math.Max(0, (int)Math.Round(start - .5f * pitch));
+            int top = Math.Max(0, (int)Math.Floor(line.Bounds.Top - .7f * pitch));
+            int bottom = Math.Min(image.Height, (int)Math.Ceiling(line.Bounds.Bottom + .6f * pitch));
+            var row = Rectangle.FromLTRB(left, top, image.Width, bottom);
+            int fieldStart = (int)Math.Round(start + 10.5f * pitch);
+            string comparable = FieldWithDamagedPunctuation.Replace(body, "/$1=");
+            if (comparable != body && fieldStart >= 0 && fieldStart < row.Right)
+            {
+                var bodyArea = Rectangle.FromLTRB(fieldStart, top, row.Right, bottom);
+                using (Bitmap crop = image.Clone(bodyArea, PixelFormat.Format32bppArgb))
+                {
+                    if (WindowsOcr.Recognize(crop).Concat(new[] { 1f, 1.25f, 1.5f }.SelectMany(scale => WindowsOcr.RecognizeLogCrop(crop, scale)))
+                        .Select(LogValidator.FixOcr).Contains(comparable))
+                    {
+                        text = text.Substring(0, type.Index) + comparable;
+                        body = comparable;
+                    }
+                }
+            }
+
+            Match timestamp = Timestamp.Match(text);
+            string time = timestamp.Success ? timestamp.Value : ReadTimestamp(image, row, fieldStart, pitch);
+            if (!timestamp.Success && time != null) text = time + " " + body;
+
+            int glyphTop = Math.Max(0, (int)Math.Floor(line.Bounds.Top - .35f * pitch));
+            int glyphBottom = Math.Min(image.Height, (int)Math.Ceiling(line.Bounds.Bottom + .3f * pitch));
+            int glyphRight = Math.Min(image.Width, (int)Math.Ceiling(line.Bounds.Right + .35f * pitch));
+            int split = Math.Min(glyphRight, Math.Max(left, fieldStart));
+            var clockArea = Rectangle.FromLTRB(left, glyphTop, split, glyphBottom);
+            var bodyBounds = Rectangle.FromLTRB(split, glyphTop, glyphRight, glyphBottom);
+            clocks.Learn(clockArea, time, bodyBounds, body);
+
+            return new CapturedLine
+            {
+                Text = text,
+                Body = body,
+                ClockArea = time == null && clockArea.Width > 0 ? clockArea : Rectangle.Empty
+            };
+        }
+
+        private static string ReadTimestamp(Bitmap image, Rectangle row, int fieldStart, float pitch)
+        {
+            // A narrowly cropped timestamp can be read even when OCR splits the row at the event type.
+            int clockHeight = (int)Math.Round(2.7f * pitch);
+            int clockTop = Math.Max(row.Top, (row.Top + row.Bottom - clockHeight) / 2);
+            var clock = Rectangle.FromLTRB(row.Left, clockTop, Math.Min(row.Right, fieldStart),
+                Math.Min(row.Bottom, clockTop + clockHeight));
+
+            string time = ReadTimestamp(image, row, 1f) ?? ReadTimestamp(image, row, 1.25f) ??
+                ReadTimestamp(image, clock, 1f) ?? ReadTimestamp(image, clock, 1.25f);
+            if (time == null)
+            {
+                // Removing a little left padding can restore a timestamp that the OCR treated as separate symbols.
+                var tightRow = Rectangle.FromLTRB(row.Left + Math.Max(1, (int)Math.Round(.35f * pitch)),
+                    Math.Max(0, clock.Top - 1), row.Right, clock.Bottom - 1);
+                time = ReadTimestamp(image, tightRow, 1.25f);
+            }
+            return time;
+        }
+
+        private static string ReadTimestamp(Bitmap image, Rectangle area, float scale)
+        {
+            if (area.Width <= 0 || area.Height <= 0) return null;
+            using (Bitmap crop = image.Clone(area, PixelFormat.Format32bppArgb))
+            {
+                foreach (string line in WindowsOcr.RecognizeLogCrop(crop, scale))
+                {
+                    Match time = Timestamp.Match(line.TrimStart());
+                    if (time.Success)
+                        return "[" + time.Groups[1].Value + ":" + time.Groups[2].Value + ":" + time.Groups[3].Value + "]";
+                }
+            }
+            return null;
+        }
+    }
+
     // System Log Integrity: [HH:MM:SS] TYPE /sector=1..256 /status=OK|WARN|ERROR
     internal static class LogValidator
     {
@@ -365,10 +491,10 @@ namespace GlyphFinder
             {
                 case LogField.Time: return "Time format is incorrect";
                 case LogField.Type: return "Event type is incorrect";
-                case LogField.MissingSector: return "Missing sector parameter";
-                case LogField.MissingStatus: return "Missing status parameter";
-                case LogField.Sector: return "Sector parameter is incorrect";
-                case LogField.Status: return "Status parameter is incorrect";
+                case LogField.MissingSector: return "Missing /sector parameter";
+                case LogField.MissingStatus: return "Missing /status parameter";
+                case LogField.Sector: return "/sector parameter is incorrect";
+                case LogField.Status: return "/status parameter is incorrect";
                 default: return "Check this text";
             }
         }

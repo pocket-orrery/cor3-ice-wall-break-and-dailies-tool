@@ -84,6 +84,7 @@ internal static class TestChecks
         var preference = new LanguagePreference(Path.Combine(output, "test-language.txt"));
         preference.Save(UiLanguage.Chinese);
         VerifyJobGuide(output);
+        VerifyJobGuideList();
         VerifyDailyTasks(output);
         GenerateLogExamples(output);
         VerifyToolWindows(freshPreference);
@@ -352,10 +353,80 @@ internal static class TestChecks
         Console.WriteLine("Job tracker parsing, server route, inline edits, compact view, summary, and both languages passed.");
     }
 
+    private static void VerifyJobGuideList()
+    {
+        var round = new JobRound();
+        JobType type = JobCatalog.Find("IP Cleanup");
+        for (int i = 0; i < 32; i++)
+            round.Add(new JobEntry
+            {
+                Type = type,
+                Server = "Relay-7",
+                Targets = new List<string> { "192.0.2.17", "192.0.2.23", "192.0.2.45" },
+                Note = "Job " + (i + 1)
+            });
+
+        using (var guide = new JobGuideWindow(UiLanguage.English, round))
+        {
+            guide.ShowInTaskbar = false;
+            guide.Location = new Point(-guide.Width - 20, 0);
+            guide.Show();
+            Application.DoEvents();
+
+            var grid = Field<DataGridView>(guide, "grid");
+            const int rowIndex = 21;
+            grid.CurrentCell = grid.Rows[rowIndex].Cells[JobGuideWindow.ColDone];
+            grid.FirstDisplayedScrollingRowIndex = 20;
+            Require(grid.Rows[rowIndex].Displayed, "the job being checked is visible after scrolling");
+
+            JobEntry job = round.Entries[rowIndex];
+            var cell = new Rectangle(0, 0, grid.Columns[JobGuideWindow.ColTargets].Width, grid.Rows[rowIndex].Height);
+            int step = Field<Font>(guide, "monoFont").Height + 3;
+            int firstLine = (cell.Height - job.Targets.Count * step) / 2 + step / 2;
+            for (int i = 0; i < job.Targets.Count; i++)
+                Require(guide.IpAtCopyButton(job, cell, new Point(16, firstLine + i * step)) == job.Targets[i],
+                    "the copy icon selects only its own IP");
+            Require(guide.IpAtCopyButton(job, cell, new Point(40, firstLine)) == null,
+                "clicking the IP text stays available for selection and editing");
+
+            MethodInfo click = typeof(DataGridView).GetMethod("OnCellMouseClick", BindingFlags.Instance | BindingFlags.NonPublic);
+            var mouse = new DataGridViewCellMouseEventArgs(JobGuideWindow.ColDone, rowIndex, 19, 20,
+                new MouseEventArgs(MouseButtons.Left, 1, 19, 20, 0));
+            click.Invoke(grid, new object[] { mouse });
+            Application.DoEvents();
+            Require(job.Done && round.DoneCount == 1 && grid.FirstDisplayedScrollingRowIndex == 20 &&
+                grid.CurrentRow.Tag == job && grid.Rows[rowIndex].Displayed,
+                "checking a scrolled job preserves the visible position and selection");
+
+            click.Invoke(grid, new object[] { mouse });
+            Application.DoEvents();
+            Require(!job.Done && round.DoneCount == 0 && grid.FirstDisplayedScrollingRowIndex == 20 && grid.CurrentRow.Tag == job,
+                "unchecking a scrolled job also preserves the visible position and selection");
+
+            guide.SelectType(Array.IndexOf(JobCatalog.Types, type));
+            Field<TextBox>(guide, "serverBox").Text = "Relay-8";
+            var targets = Field<TextBox>(guide, "targetsBox");
+            targets.Focus();
+            targets.Text = "192.0.2.60";
+            targets.SelectionStart = targets.TextLength;
+            var enter = Message.Create(targets.Handle, 0x0100, (IntPtr)Keys.Enter, IntPtr.Zero);
+            Require(targets.Multiline && targets.AcceptsReturn && !targets.PreProcessMessage(ref enter) && round.Entries.Count == 32,
+                "Enter in the IP input reaches the multiline editor without submitting a job");
+            SendMessage(targets.Handle, 0x0102, (IntPtr)'\r', IntPtr.Zero);
+            targets.AppendText("192.0.2.61");
+            Require(targets.Lines.SequenceEqual(new[] { "192.0.2.60", "192.0.2.61" }),
+                "pressing Enter lets the user type the next IP on its own line");
+            Field<Button>(guide, "addButton").PerformClick();
+            Require(round.Entries.Count == 33 && round.Entries[32].Targets.SequenceEqual(new[] { "192.0.2.60", "192.0.2.61" }),
+                "adding a manually entered multiline task records both IPs");
+        }
+        Console.WriteLine("Individual IP copy targets and scrolling while checking jobs passed.");
+    }
+
     private static void VerifyCardImport()
     {
         var round = new JobRound();
-        var info = new List<string> { "RM7-EIL5", "Access Grant", "PCF", "109" };
+        var info = new List<string> { "RM7-EILS", "Access Grant", "PCF", "109" };
         Func<Bitmap, List<string>> recognize = image => image.Width == 900
             ? new List<string> { "IP Cleanup", "Time Left" }
             : image.Width == 300 ? info : new List<string> { "172.20.35.11", "100.64.2.118" };
@@ -730,8 +801,12 @@ internal static class TestChecks
         Require(fields(7).SequenceEqual(new[] { LogField.Format, LogField.MissingSector }), "misspelled sector key");
         Require(LogValidator.CheckLine("[01:02:03] PING /sector= /status=").Issues.Select(i => i.Field)
             .SequenceEqual(new[] { LogField.Sector, LogField.Status }), "empty values are incorrect parameters");
-        Require(LogValidator.FieldName(LogField.MissingSector) == "Missing sector parameter" &&
-            LogValidator.FieldName(LogField.Status) == "Status parameter is incorrect", "the game's option names");
+        var gameOptions = new[] { LogField.Time, LogField.Type, LogField.MissingSector, LogField.MissingStatus, LogField.Sector, LogField.Status };
+        Require(gameOptions.Select(LogValidator.FieldName).SequenceEqual(new[]
+        {
+            "Time format is incorrect", "Event type is incorrect", "Missing /sector parameter", "Missing /status parameter",
+            "/sector parameter is incorrect", "/status parameter is incorrect"
+        }), "all six error labels match the game");
 
         // OCR clean-up fixes misread characters but keeps the game's deliberate errors.
         var ocr = new[]
@@ -750,6 +825,7 @@ internal static class TestChecks
         using (Bitmap prepared = WindowsOcr.Prepare(text))
             Require(prepared.Width > text.Width && prepared.GetPixel(2, 2).R == 255 && prepared.GetPixel(2, prepared.Height / 2).R == 255,
                 "OCR input is enlarged, dark on white, with the scanline background removed");
+        VerifyLogClockFallback();
         TryWindowsOcr();
 
         using (Bitmap screen = DrawSignal(morse, 2))
@@ -759,8 +835,11 @@ internal static class TestChecks
             var area = new Rectangle(0, 0, screen.Width, screen.Height);
             var reads = new Queue<List<string>>(new[]
             {
-                new List<string> { "PULSE", "O [21:14:53] SCAN Isector = 12 /status=0K", "(O9:l3;59] SCAN /sect0r=O6" },
-                new List<string> { "(O9:l3;59] SCAN /sect0r=O6", "[18:67:31] ROUTE-CHECK /sector=289 /status=OK" }
+                new List<string> { "PULSE", "AUTH /sector=126 /status=OK", "[08:42 SYNC /sector=81 /status=ERROR", "[12:34:56]",
+                    "O [21:14:53] SCAN Isector = 12 /status=0K", "(O9:l3;59] SCAN /sect0r=O6" },
+                new List<string> { "(O9:l3;59] SCAN /sect0r=O6", "[18:67:31] ROUTE-CHECK /sector=289 /status=OK",
+                    "[18-07-31] PING /sector=12 /status=OK" },
+                new List<string> { "[18:67:31 ROUTE-CHECK /sector=289 /status=OK", "SYNC /sector=81 /status=ERROR" }
             });
             Func<Bitmap, List<string>> recognize = image =>
             {
@@ -784,16 +863,22 @@ internal static class TestChecks
                 Field<Segmented>(daily, "pages").SelectedIndex = 1;
                 MethodInfo readLogs = typeof(DailyTaskWindow).GetMethod("ReadLogs", BindingFlags.NonPublic | BindingFlags.Instance);
                 Finish((Task)readLogs.Invoke(daily, new object[] { false }));
+                Require(daily.Checks.Count == 2 && Field<Label>(daily, "status").Text.Contains("Skipped 4 incomplete fragments"),
+                    "screenshot fragments with a missing or partial timestamp or no log text are skipped");
                 Finish((Task)readLogs.Invoke(daily, new object[] { false }));
-                Require(picks == 2 && daily.Checks.Count == 3 && daily.Checks[0].Ok && daily.Checks[1].Line == "[09:13:59] SCAN /sector=06" &&
-                    daily.Checks[2].Issues.Select(i => i.Field).SequenceEqual(new[] { LogField.Time, LogField.Sector }),
-                    "logs read from the screen are cleaned up, appended, and not duplicated");
+                Require(picks == 2 && daily.Checks.Count == 4 && daily.Checks[0].Ok && daily.Checks[1].Line == "[09:13:59] SCAN /sector=06" &&
+                    daily.Checks[2].Issues.Select(i => i.Field).SequenceEqual(new[] { LogField.Time, LogField.Sector }) &&
+                    daily.Checks[3].Issues.Select(i => i.Field).SequenceEqual(new[] { LogField.Time }),
+                    "fully read timestamps are imported even when the time or its separators violate the format");
+                Finish((Task)readLogs.Invoke(daily, new object[] { false }));
+                Require(daily.Checks.Count == 4 && Field<Label>(daily, "status").Text.Contains("No complete logs found"),
+                    "a capture of only fragments keeps the existing logs and explains how to reselect");
                 Finish((Task)readLogs.Invoke(daily, new object[] { false }));
                 Require(Field<Label>(daily, "status").Text.Contains("No text recognition language"), "a missing OCR engine is reported");
                 Field<InputBox>(daily, "logInput").Box.Text = string.Join(Environment.NewLine, lines);
                 Require(daily.Checks.Count == 8 && Field<DataGridView>(daily, "results").Rows.Count == 8 &&
                     Field<Label>(daily, "summary").Text == "6 of 8 lines are violations: #2, #4, #5, #6, #7, #8" &&
-                    daily.Report().StartsWith("#2  [09:13:59] SCAN /sector=06" + Environment.NewLine + "    Missing status parameter: /status is missing"),
+                    daily.Report().StartsWith("#2  [09:13:59] SCAN /sector=06" + Environment.NewLine + "    Missing /status parameter: /status is missing"),
                     "log results and summary");
                 string report = daily.Report();
                 int start = report.IndexOf("#6  ", StringComparison.Ordinal);
@@ -858,13 +943,13 @@ internal static class TestChecks
     }
 
     // Light monospace text on a dark background with scanlines, like the game's log list.
-    private static Bitmap DrawLogs(string[] lines, int width = 560)
+    private static Bitmap DrawLogs(string[] lines, int width = 560, string fontFamily = null)
     {
         var image = new Bitmap(width, 30 + lines.Length * 34);
         using (Graphics g = Graphics.FromImage(image))
         using (var text = new SolidBrush(Color.FromArgb(190, 205, 215)))
         using (var scan = new Pen(Color.FromArgb(22, 30, 36)))
-        using (var font = new Font(FontFamily.GenericMonospace, 13f))
+        using (var font = new Font(fontFamily ?? FontFamily.GenericMonospace.Name, 13f))
         {
             g.Clear(Color.FromArgb(12, 17, 21));
             for (int y = 0; y < image.Height; y += 3) g.DrawLine(scan, 0, y, image.Width, y);
@@ -872,6 +957,23 @@ internal static class TestChecks
             for (int i = 0; i < lines.Length; i++) g.DrawString(lines[i], font, text, 14, 14 + i * 34);
         }
         return image;
+    }
+
+    private static void VerifyLogClockFallback()
+    {
+        string[] clocks = { "[01:23:45]", "[17:58:09]", "[06:40:07]", "[12:63:10]", "(12:63:10]", "" };
+        using (Bitmap image = DrawLogs(clocks, fontFamily: "Courier New"))
+        {
+            var recognizer = new LogClockRecognizer(image);
+            Func<int, Rectangle> area = row => new Rectangle(0, 13 + row * 34, image.Width, 30);
+            for (int i = 0; i < 3; i++) recognizer.Learn(area(i), clocks[i], Rectangle.Empty, "");
+            Require(recognizer.Read(area(3)) == clocks[3],
+                "visual timestamp recovery preserves minutes outside the valid range");
+            Require(recognizer.Read(area(4)) == null,
+                "visual timestamp recovery does not replace a real parenthesis with a bracket");
+            Require(recognizer.Read(area(5)) == null,
+                "visual timestamp recovery does not invent a timestamp for a blank area");
+        }
     }
 
     // Runs the real Windows text recognition when it is available. It reports instead of failing, because the
@@ -883,7 +985,7 @@ internal static class TestChecks
         {
             try
             {
-                List<string> read = WindowsOcr.Recognize(image).Select(LogValidator.FixOcr).ToList();
+                List<string> read = LogReader.Read(image).Select(LogValidator.FixOcr).ToList();
                 bool same = read.SequenceEqual(sample);
                 Console.WriteLine("Windows OCR {0}: {1}", same ? "read the sample exactly" : "read the sample with differences",
                     string.Join(" | ", read));

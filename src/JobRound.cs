@@ -237,9 +237,9 @@ namespace GlyphFinder
             server = Regex.Replace(server.ToUpperInvariant(), @"\s*[-–—]\s*", "-");
             if (server.Length > 40 || !Regex.IsMatch(server, @"^[A-Z0-9]+(?:[ -][A-Z0-9]+)*$") ||
                 !server.Any(char.IsDigit) || !server.Any(char.IsLetter) || Regex.IsMatch(server, @"^CR\s*[0-9]+$")) return null;
-            // In a directional sector ID, the positions around L are numeric: EIL5 is E1L5.
-            return Regex.Replace(server, @"(?<=-[NESW])[0-9IO]{1,2}L[0-9IO]{1,2}(?=$|[- ])",
-                match => match.Value.Replace('I', '1').Replace('O', '0'));
+            // The characters around L in a directional sector are digits, e.g. E1LS is E1L5.
+            return Regex.Replace(server, @"(?<direction>(?:^|-)[NESW])(?<sector>[0-9IO]{1,2}L[0-9IOS]{1,2})(?=$|[- ])",
+                match => match.Groups["direction"].Value + match.Groups["sector"].Value.Replace('I', '1').Replace('O', '0').Replace('S', '5'));
         }
 
         public bool HasDuplicate(JobEntry candidate)

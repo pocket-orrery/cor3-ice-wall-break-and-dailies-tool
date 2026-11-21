@@ -71,7 +71,7 @@ namespace GlyphFinder
             this.language = language;
             this.capture = capture;
             this.pickArea = pickArea;
-            this.recognize = recognize ?? WindowsOcr.Recognize;
+            this.recognize = recognize ?? LogReader.Read;
             BackColor = Palette.Background;
             ForeColor = Palette.Text;
             Font = Theme.Ui(9f);
@@ -352,7 +352,8 @@ namespace GlyphFinder
             Bitmap shot;
             if (chooseArea || logArea == null)
             {
-                ScreenSelection selected = await PickSnapshot("框住日志列表（SCAN LOGS OUTPUT 下面的那些行）", "Select the log list (the lines under SCAN LOGS OUTPUT).");
+                ScreenSelection selected = await PickSnapshot("框住 SCAN LOGS OUTPUT 下方的日志行，包含左侧时间戳",
+                    "Select the rows below SCAN LOGS OUTPUT, including the timestamps on the left.");
                 if (selected == null) return;
                 logArea = selected.Bounds;
                 shot = selected.Image;
@@ -375,17 +376,23 @@ namespace GlyphFinder
 
             var existing = new HashSet<string>(LogLines(logInput.Box.Text));
             var added = new List<string>();
-            int found = 0;
+            int found = 0, skipped = 0;
             foreach (string raw in lines)
             {
                 string line = LogValidator.FixOcr(raw);
-                if (line.Count(char.IsLetterOrDigit) < 6) continue;
+                if (line.Length == 0) continue;
+                if (!LogReader.CanImport(line))
+                {
+                    skipped++;
+                    continue;
+                }
                 found++;
                 if (existing.Add(line)) added.Add(line);
             }
             if (found == 0)
             {
-                SetStatus(Translate("没有识别到日志。点「重选区域」只框住日志那几行。", "No log lines found. Choose Reselect and select just the log lines."), true);
+                SetStatus(Translate("没有读到完整日志。请把左侧时间戳和日志正文一起框进去再读。",
+                    "No complete logs found. Select both the timestamps and the log text, then read again."), true);
                 return;
             }
             if (added.Count > 0)
@@ -393,9 +400,10 @@ namespace GlyphFinder
                 string text = logInput.Box.Text.TrimEnd();
                 logInput.Box.Text = (text.Length > 0 ? text + Environment.NewLine : "") + string.Join(Environment.NewLine, added);
             }
-            SetStatus(string.Format(Translate("识别到 {0} 行，新增 {1} 行。请对照游戏核对一遍，识别偶尔会认错字符。列表要滚动时，滚动后再点一次读取。",
-                "Read {0} lines, {1} new. Compare them with the game; recognition can misread a character. If the list scrolls, scroll and read again."),
-                found, added.Count));
+            string message = string.Format(Translate("识别到 {0} 行，新增 {1} 行。", "Read {0} lines, {1} new."), found, added.Count);
+            if (skipped > 0)
+                message += string.Format(Translate(" 跳过 {0} 个未读完整的片段。", " Skipped {0} incomplete fragments."), skipped);
+            SetStatus(message + Translate(" 滚动后可以继续读取。", " Scroll to read more."));
         }
 
         private static IEnumerable<string> LogLines(string text)
@@ -566,7 +574,7 @@ namespace GlyphFinder
             }
             else if (bad.Count == 0)
             {
-                summary.Text = string.Format(Translate("{0} 行全部符合格式。", "All {0} lines are valid."), checks.Count);
+                summary.Text = string.Format(Translate("已检查的 {0} 行符合格式。", "All {0} checked lines are valid."), checks.Count);
                 summary.ForeColor = Palette.Success;
             }
             else
