@@ -85,6 +85,7 @@ internal static class TestChecks
         preference.Save(UiLanguage.Chinese);
         VerifyJobGuide(output);
         VerifyJobGuideList();
+        VerifyTerminalPuzzle(output);
         VerifyDailyTasks(output);
         GenerateLogExamples(output);
         VerifyToolWindows(freshPreference);
@@ -356,6 +357,7 @@ internal static class TestChecks
     private static void VerifyJobGuideList()
     {
         var round = new JobRound();
+        var copiedIps = new List<string>();
         JobType type = JobCatalog.Find("IP Cleanup");
         for (int i = 0; i < 32; i++)
             round.Add(new JobEntry
@@ -366,7 +368,7 @@ internal static class TestChecks
                 Note = "Job " + (i + 1)
             });
 
-        using (var guide = new JobGuideWindow(UiLanguage.English, round))
+        using (var guide = new JobGuideWindow(UiLanguage.English, round, writeClipboard: copiedIps.Add))
         {
             guide.ShowInTaskbar = false;
             guide.Location = new Point(-guide.Width - 20, 0);
@@ -388,6 +390,22 @@ internal static class TestChecks
                     "the copy icon selects only its own IP");
             Require(guide.IpAtCopyButton(job, cell, new Point(40, firstLine)) == null,
                 "clicking the IP text stays available for selection and editing");
+
+            Rectangle target = grid.GetCellDisplayRectangle(JobGuideWindow.ColTargets, rowIndex, false);
+            var firstCopy = new Point(target.Left + 16, target.Top + firstLine);
+            var secondCopy = new Point(firstCopy.X, firstCopy.Y + step);
+            var secondIp = new Point(target.Left + 46, secondCopy.Y);
+            MouseClick(grid, firstCopy, false);
+            MouseClick(grid, secondCopy, true);
+            Require(copiedIps.SequenceEqual(job.Targets.Take(2)) && !grid.IsCurrentCellInEditMode && !grid.BeginEdit(true),
+                "rapid copying across two IPs uses both copy buttons without opening an editor");
+            MouseClick(grid, secondIp, true);
+            Require(!grid.IsCurrentCellInEditMode, "a click on the icon followed by IP text cannot start editing");
+            MouseClick(grid, secondIp, false);
+            Require(!grid.IsCurrentCellInEditMode, "a single click on selected IP text does not start editing");
+            MouseClick(grid, secondIp, true);
+            Require(grid.IsCurrentCellInEditMode, "a double click on the same IP text starts editing");
+            grid.CancelEdit();
 
             MethodInfo click = typeof(DataGridView).GetMethod("OnCellMouseClick", BindingFlags.Instance | BindingFlags.NonPublic);
             var mouse = new DataGridViewCellMouseEventArgs(JobGuideWindow.ColDone, rowIndex, 19, 20,
@@ -421,6 +439,69 @@ internal static class TestChecks
                 "adding a manually entered multiline task records both IPs");
         }
         Console.WriteLine("Individual IP copy targets and scrolling while checking jobs passed.");
+    }
+
+    private static void MouseClick(Control control, Point point, bool doubleClick)
+    {
+        const int leftDown = 0x0201, leftDoubleClick = 0x0203, leftUp = 0x0202;
+        var position = (IntPtr)((point.Y << 16) | (point.X & 0xffff));
+        SendMessage(control.Handle, doubleClick ? leftDoubleClick : leftDown, (IntPtr)1, position);
+        SendMessage(control.Handle, leftUp, IntPtr.Zero, position);
+    }
+
+    private static void VerifyTerminalPuzzle(string output)
+    {
+        var example = new TerminalPuzzle();
+        Require(example.Remaining.Count == 81 && example.Record(0, 3) && example.Record(13, 1) &&
+            example.Remaining.Select(candidate => TerminalPuzzle.Format(candidate)).SequenceEqual(new[]
+            {
+                "v1.0  PUT  Fiber  DES", "v1.0  PUT  Sat  RSA", "v1.0  POST  Fiber  RSA"
+            }), "the two observed terminal trials leave exactly three combinations");
+        Require(!example.Record(13, 3) && example.Trials.Count == 2 && example.Remaining.Count == 3,
+            "contradictory feedback preserves the terminal history and possibilities");
+        int maxTrials = 0;
+        for (int secret = 0; secret < TerminalPuzzle.CombinationCount; secret++)
+        {
+            var puzzle = new TerminalPuzzle();
+            for (int attempt = 0; attempt < 6 && !puzzle.Solved; attempt++)
+            {
+                int guess = puzzle.Recommend();
+                int different = Enumerable.Range(0, TerminalPuzzle.FieldCount)
+                    .Count(field => TerminalPuzzle.OptionAt(secret, field) != TerminalPuzzle.OptionAt(guess, field));
+                Require(puzzle.Record(guess, different) && puzzle.Remaining.Contains(secret),
+                    "correct game feedback always retains the hidden combination");
+            }
+            Require(puzzle.Solved && puzzle.Remaining.Single() == secret, "the terminal strategy solves every combination");
+            maxTrials = Math.Max(maxTrials, puzzle.Trials.Count);
+        }
+        Require(maxTrials == 5, "the recommended strategy solves all combinations within five attempts");
+
+        using (var window = new TerminalPuzzleWindow(UiLanguage.English, example))
+        {
+            window.ShowInTaskbar = false;
+            window.Location = new Point(-window.Width - 20, 0);
+            window.Show();
+            window.Size = window.MinimumSize;
+            Application.DoEvents();
+            var mismatch = Field<Segmented>(window, "mismatch");
+            var record = Field<FlatButton>(window, "record");
+            var reset = Field<FlatButton>(window, "reset");
+            Require(reset.Parent.ClientRectangle.Contains(reset.Bounds), "English terminal controls fit at the minimum width");
+            Field<FlatButton>(window, "undo").PerformClick();
+            Require(example.Trials.Count == 1 && mismatch.SelectedIndex == 1 && record.Enabled, "undo refills the removed trial for correction");
+            record.PerformClick();
+            Require(example.Trials.Count == 2 && Field<ListBox>(window, "candidates").Items.Count == 3 && !record.Enabled,
+                "record refreshes the recommendation and the remaining combinations");
+            window.SetLanguage(UiLanguage.Chinese);
+            Application.DoEvents();
+            SaveWindow(window, Path.Combine(output, "ui-terminal-preview.png"));
+            Require(window.Text == "终端入侵助手" && example.Trials.Count == 2, "language switching preserves the terminal round");
+            Require(reset.Parent.ClientRectangle.Contains(reset.Bounds),
+                "translated terminal controls fit (" + reset.Bounds + " inside " + reset.Parent.ClientRectangle + ")");
+            reset.PerformClick();
+            Require(example.Trials.Count == 0 && example.Remaining.Count == 81, "new round starts with a blank terminal history");
+        }
+        Console.WriteLine("Terminal recommendations solved all 81 combinations in at most {0} attempts.", maxTrials);
     }
 
     private static void VerifyCardImport()
@@ -597,14 +678,29 @@ internal static class TestChecks
             const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
             type.GetMethod("ShowJobs", flags).Invoke(finder, null);
             type.GetMethod("ShowDaily", flags).Invoke(finder, null);
+            var terminalButton = Field<FlatButton>(finder, "terminalButton");
+            terminalButton.PerformClick();
+            TerminalPuzzleWindow terminal = Field<TerminalPuzzleWindow>(finder, "terminalWindow");
+            Require(terminalButton.Kind == ButtonKind.Primary && terminal != null && terminal.Owner == null && terminal.ShowInTaskbar,
+                "Terminal opens from the blue Finder toolbar button");
+            finder.Size = finder.MinimumSize;
+            var languageButton = Field<FlatButton>(finder, "languageButton");
+            foreach (UiLanguage language in new[] { UiLanguage.Chinese, UiLanguage.English })
+            {
+                type.GetMethod("ChooseLanguage", flags).Invoke(finder, new object[] { language });
+                Application.DoEvents();
+                Require(terminalButton.Right <= languageButton.Left && terminalButton.Parent.ClientRectangle.Contains(terminalButton.Bounds),
+                    "the Terminal button fits the Finder toolbar in " + language + " (" + terminalButton.Bounds +
+                    " beside " + languageButton.Bounds + " within " + terminalButton.Parent.ClientRectangle + ")");
+            }
             JobGuideWindow guide = Field<JobGuideWindow>(finder, "jobsWindow");
             DailyTaskWindow daily = Field<DailyTaskWindow>(finder, "dailyWindow");
             Require(guide.Owner == null && daily.Owner == null && guide.ShowInTaskbar && daily.ShowInTaskbar,
                 "tools have independent taskbar windows");
             finder.WindowState = FormWindowState.Minimized;
             Application.DoEvents();
-            Require(guide.Visible && daily.Visible && guide.WindowState == FormWindowState.Normal &&
-                daily.WindowState == FormWindowState.Normal, "minimizing Finder leaves both tools open");
+            Require(guide.Visible && daily.Visible && terminal.Visible && guide.WindowState == FormWindowState.Normal &&
+                daily.WindowState == FormWindowState.Normal && terminal.WindowState == FormWindowState.Normal, "minimizing Finder leaves its tools open");
             guide.WindowState = FormWindowState.Minimized;
             Require(daily.WindowState == FormWindowState.Normal, "minimizing Job Guide leaves Daily Tasks open");
             finder.WindowState = guide.WindowState = FormWindowState.Normal;
@@ -634,18 +730,18 @@ internal static class TestChecks
             finder.BeginInvoke(new Action(() => repainted = true));
             read = area =>
             {
-                Require(!finder.Visible && !guide.Visible && !daily.Visible, "all overlapping tools are hidden before capture");
+                Require(!finder.Visible && !guide.Visible && !daily.Visible && !terminal.Visible, "all overlapping tools are hidden before capture");
                 Require(repainted, "the UI processes queued repaint work before capture");
                 return new Bitmap(10, 10);
             };
-            Rectangle covered = Rectangle.Union(Rectangle.Union(finder.Bounds, guide.Bounds), daily.Bounds);
+            Rectangle covered = Rectangle.Union(Rectangle.Union(Rectangle.Union(finder.Bounds, guide.Bounds), daily.Bounds), terminal.Bounds);
             var pending = (Task<Bitmap>)type.GetMethod("CaptureToolArea", flags).Invoke(finder, new object[] { covered });
             Require(!pending.IsCompleted && !finder.Visible, "capture yields after hiding the window");
             Finish(pending);
             using (Bitmap image = pending.GetAwaiter().GetResult()) Require(image != null, "capture returns the new frame");
-            Require(finder.Visible && guide.Visible && daily.Visible, "tools are restored after capture");
+            Require(finder.Visible && guide.Visible && daily.Visible && terminal.Visible, "tools are restored after capture");
             finder.Close();
-            Require(guide.IsDisposed && daily.IsDisposed, "closing Finder closes both tools");
+            Require(guide.IsDisposed && daily.IsDisposed && terminal.IsDisposed, "closing Finder closes its tools");
         }
     }
 

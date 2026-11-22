@@ -25,7 +25,7 @@ namespace GlyphFinder
     {
         internal const string GameName = "ICE WALL BREAK";
         internal const string ProductName = GameName + " Finder";
-        internal const string ReleaseVersion = "1.0.5";
+        internal const string ReleaseVersion = "1.0.6";
 
         [STAThread]
         private static void Main(string[] args)
@@ -147,7 +147,10 @@ namespace GlyphFinder
         private readonly FlatButton watch = new FlatButton { Kind = ButtonKind.Primary, MinimumSize = new Size(88, 30) };
         private readonly FlatButton jobsButton = new FlatButton { Icon = ButtonGlyph.List };
         private readonly FlatButton dailyButton = new FlatButton { Icon = ButtonGlyph.Pulse };
+        private readonly FlatButton terminalButton = new FlatButton { Kind = ButtonKind.Primary };
         private DailyTaskWindow dailyWindow;
+        private TerminalPuzzleWindow terminalWindow;
+        private readonly TerminalPuzzle terminalPuzzle = new TerminalPuzzle();
         private readonly JobRound jobRound = new JobRound();
         private JobGuideWindow jobsWindow;
         private readonly FlatButton testButton = new FlatButton { Kind = ButtonKind.Ghost, Chevron = true, Margin = Padding.Empty };
@@ -225,6 +228,7 @@ namespace GlyphFinder
             select.Click += async delegate { await SelectScreen(); };
             jobsButton.Click += delegate { ShowJobs(); };
             dailyButton.Click += delegate { ShowDaily(); };
+            terminalButton.Click += delegate { ShowTerminal(); };
             screenshotItem.Click += delegate { OpenImage(); };
             demoItem.Click += delegate { Demo(); };
             testMenu.Items.AddRange(new ToolStripItem[] { screenshotItem, demoItem });
@@ -248,7 +252,7 @@ namespace GlyphFinder
             languageMenu.Items.Add("中文", null, delegate { ChooseLanguage(UiLanguage.Chinese); });
             languageMenu.Items.Add("English", null, delegate { ChooseLanguage(UiLanguage.English); });
             languageButton.Click += delegate { languageMenu.Show(languageButton, new Point(0, languageButton.Height + 2)); };
-            layout.Controls.Add(Bar(new Control[] { rowsLabel, boardRows, intervalLabel, scanInterval }, languageButton), 0, 1);
+            layout.Controls.Add(Bar(new Control[] { rowsLabel, boardRows, intervalLabel, scanInterval, terminalButton }, languageButton), 0, 1);
             boardRows.ValueChanged += SettingsChanged;
 
             statusCard.Controls.Add(status);
@@ -266,6 +270,7 @@ namespace GlyphFinder
             {
                 if (jobsWindow != null) jobsWindow.Close();
                 if (dailyWindow != null) dailyWindow.Close();
+                if (terminalWindow != null) terminalWindow.Close();
                 timer.Dispose();
                 scanMenu.Dispose();
                 testMenu.Dispose();
@@ -288,6 +293,7 @@ namespace GlyphFinder
             ApplyLanguage();
             if (jobsWindow != null) jobsWindow.SetLanguage(language);
             if (dailyWindow != null) dailyWindow.SetLanguage(language);
+            if (terminalWindow != null) terminalWindow.SetLanguage(language);
         }
 
         private void ApplyLanguage()
@@ -296,6 +302,7 @@ namespace GlyphFinder
             select.Text = Translate("框选", "Select");
             jobsButton.Text = Translate("工作手册", "Job Guide");
             dailyButton.Text = Translate("每日任务", "Daily");
+            terminalButton.Text = Translate("终端入侵", "Terminal");
             tips.SetToolTip(dailyButton, Translate("Signal Decode 与 Log Integrity 两个每日任务的辅助工具。", "Helpers for the Signal Decode and Log Integrity daily tasks."));
             testButton.Text = Translate("测试", "Test");
             screenshotItem.Text = Translate("打开截图", "Open screenshot");
@@ -359,6 +366,21 @@ namespace GlyphFinder
                 Math.Max(area.Top, Math.Min(Top, area.Bottom - window.Height)));
         }
 
+        private void ShowTerminal()
+        {
+            if (terminalWindow != null)
+            {
+                if (terminalWindow.WindowState == FormWindowState.Minimized) terminalWindow.WindowState = FormWindowState.Normal;
+                terminalWindow.Activate();
+                return;
+            }
+            terminalWindow = new TerminalPuzzleWindow(language, terminalPuzzle);
+            if (windowSizes != null) windowSizes.Bind(terminalWindow, "terminal");
+            terminalWindow.FormClosed += delegate { terminalWindow = null; };
+            PlaceBeside(terminalWindow);
+            terminalWindow.Show();
+        }
+
         private static void FitWindow(Form window, Rectangle area)
         {
             window.Size = new Size(Math.Min(window.Width, area.Width), Math.Min(window.Height, area.Height));
@@ -372,7 +394,7 @@ namespace GlyphFinder
 
         private IEnumerable<Form> VisibleToolWindows()
         {
-            return new Form[] { this, jobsWindow, dailyWindow }
+            return new Form[] { this, jobsWindow, dailyWindow, terminalWindow }
                 .Where(form => form != null && form.Visible && form.WindowState != FormWindowState.Minimized);
         }
 

@@ -24,7 +24,8 @@ $common = @(
     "/win32manifest:$src\app.manifest"
 )
 $engine = @("$src\Matcher.cs", "$src\TargetPattern.cs")
-$finder = @("$src\Program.cs", "$src\SelectionWindow.cs", "$src\LanguagePreference.cs", "$src\Theme.cs", "$src\JobRound.cs", "$src\JobGuideWindow.cs", "$src\DailyTasks.cs", "$src\LogClockRecognizer.cs", "$src\WindowsOcr.cs", "$src\DailyTaskWindow.cs")
+$finder = @("$src\Program.cs", "$src\SelectionWindow.cs", "$src\LanguagePreference.cs", "$src\Theme.cs", "$src\JobRound.cs", "$src\JobGuideWindow.cs", "$src\DailyTasks.cs", "$src\LogClockRecognizer.cs", "$src\WindowsOcr.cs", "$src\DailyTaskWindow.cs",
+    "$src\TerminalPuzzle.cs", "$src\TerminalPuzzleWindow.cs")
 
 & $compiler @common /main:TestChecks "/out:$build\TestChecks.exe" @engine @finder "$tests\TestBoards.cs" "$tests\TestChecks.cs"
 if ($LASTEXITCODE -ne 0) { throw 'Could not compile the fixture checks.' }

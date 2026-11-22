@@ -24,6 +24,7 @@ namespace GlyphFinder
         private readonly Func<string, string, Task<Bitmap>> pickImage;
         private readonly Func<Bitmap, List<string>> recognize;
         private readonly Func<Bitmap, List<OcrTextLine>> recognizeLines;
+        private readonly Action<string> writeClipboard;
         private UiLanguage language;
 
         private readonly TableLayoutPanel layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(14, 12, 14, 10) };
@@ -59,6 +60,9 @@ namespace GlyphFinder
         private readonly Label hint = new Label { Dock = DockStyle.Top, AutoSize = true, ForeColor = Palette.Muted, BackColor = Palette.Panel };
         private readonly Label caution = new Label { Dock = DockStyle.Top, AutoSize = true, ForeColor = Palette.Accent, BackColor = Palette.Panel };
         private readonly TextBox serverBox, targetsBox, noteBox;
+        private JobEntry firstIpClick;
+        private string firstIpText;
+        private bool openingIpEditor;
         private int typeIndex;
 
         private readonly FlowLayoutPanel footer = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Margin = Padding.Empty };
@@ -75,7 +79,8 @@ namespace GlyphFinder
         private int hoverRow = -1;
 
         internal JobGuideWindow(UiLanguage language, JobRound round, Func<string, string, Task<Bitmap>> pickImage = null,
-            Func<Bitmap, List<string>> recognize = null, Func<Bitmap, List<OcrTextLine>> recognizeLines = null)
+            Func<Bitmap, List<string>> recognize = null, Func<Bitmap, List<OcrTextLine>> recognizeLines = null,
+            Action<string> writeClipboard = null)
         {
             this.language = language;
             this.round = round;
@@ -83,6 +88,7 @@ namespace GlyphFinder
             this.recognize = recognize ?? WindowsOcr.Recognize;
             this.recognizeLines = recognizeLines ?? (recognize == null
                 ? (Func<Bitmap, List<OcrTextLine>>)WindowsOcr.RecognizeLines : null);
+            this.writeClipboard = writeClipboard ?? Clipboard.SetText;
             serverBox = serverInput.Box;
             targetsBox = targetsInput.Box;
             noteBox = noteInput.Box;
@@ -259,6 +265,10 @@ namespace GlyphFinder
             grid.CellPainting += PaintCell;
             grid.ColumnWidthChanged += delegate { QueueGridSize(); };
             grid.CellValueChanged += GridValueChanged;
+            grid.CellBeginEdit += delegate(object sender, DataGridViewCellCancelEventArgs e)
+            {
+                if (e.ColumnIndex == ColTargets && IpEntry(e.RowIndex) != null && !openingIpEditor) e.Cancel = true;
+            };
             grid.DataError += delegate(object sender, DataGridViewDataErrorEventArgs e) { e.ThrowException = false; };
             grid.SelectionChanged += delegate { UpdateActions(); grid.Invalidate(); };
             grid.EditingControlShowing += delegate(object sender, DataGridViewEditingControlShowingEventArgs e)
@@ -273,6 +283,16 @@ namespace GlyphFinder
             {
                 if (e.Button == MouseButtons.Right && e.RowIndex >= 0)
                     grid.CurrentCell = grid.Rows[e.RowIndex].Cells[Math.Max(ColServer, e.ColumnIndex)];
+                if (e.Button != MouseButtons.Left) return;
+                JobEntry entry = e.ColumnIndex == ColTargets ? IpEntry(e.RowIndex) : null;
+                if (e.Clicks == 1)
+                {
+                    firstIpClick = entry;
+                    firstIpText = entry == null ? null : IpAtText(entry, TargetCell(e.RowIndex), e.Location);
+                }
+                if (entry == null || grid.IsCurrentCellInEditMode) return;
+                string ip = IpAtCopyButton(entry, TargetCell(e.RowIndex), e.Location);
+                if (ip != null) CopyText(ip, Translate("已复制 ", "Copied ") + ip);
             };
             grid.CellMouseClick += delegate(object sender, DataGridViewCellMouseEventArgs e)
             {
@@ -282,16 +302,19 @@ namespace GlyphFinder
                 if (e.ColumnIndex == ColDone) ToggleDone(entry);
                 else if (e.ColumnIndex == ColAccess && entry.Type.NeedsServer)
                     ChangeAccess(entry, (JobAccess)(((int)entry.Access + 1) % JobCatalog.AccessNames.Length));
-                else if (e.ColumnIndex == ColTargets && entry.Type.Targets == TargetKind.Ip && !grid.IsCurrentCellInEditMode)
-                {
-                    var cell = new Rectangle(0, 0, grid.Columns[ColTargets].Width, grid.Rows[e.RowIndex].Height);
-                    string ip = IpAtCopyButton(entry, cell, e.Location);
-                    if (ip != null) CopyText(ip, Translate("已复制 ", "Copied ") + ip);
-                }
             };
-            grid.CellDoubleClick += delegate(object sender, DataGridViewCellEventArgs e)
+            grid.CellMouseDoubleClick += delegate(object sender, DataGridViewCellMouseEventArgs e)
             {
-                if (e.RowIndex >= 0 && e.ColumnIndex >= 0 && !grid.Rows[e.RowIndex].Cells[e.ColumnIndex].ReadOnly) grid.BeginEdit(true);
+                if (e.Button != MouseButtons.Left || e.RowIndex < 0 || e.ColumnIndex < 0) return;
+                var cell = grid.Rows[e.RowIndex].Cells[e.ColumnIndex];
+                if (cell.ReadOnly) return;
+                JobEntry entry = e.ColumnIndex == ColTargets ? IpEntry(e.RowIndex) : null;
+                if (entry != null && (entry != firstIpClick || firstIpText == null ||
+                    firstIpText != IpAtText(entry, TargetCell(e.RowIndex), e.Location))) return;
+                if (grid.CurrentCell != cell) grid.CurrentCell = cell;
+                openingIpEditor = entry != null;
+                try { grid.BeginEdit(true); }
+                finally { openingIpEditor = false; }
             };
             grid.KeyDown += delegate(object sender, KeyEventArgs e)
             {
@@ -326,6 +349,17 @@ namespace GlyphFinder
 
         private int IpLineHeight { get { return monoFont.Height + 3; } }
 
+        private JobEntry IpEntry(int row)
+        {
+            var entry = row >= 0 ? grid.Rows[row].Tag as JobEntry : null;
+            return entry != null && entry.Type.Targets == TargetKind.Ip ? entry : null;
+        }
+
+        private Rectangle TargetCell(int row)
+        {
+            return new Rectangle(0, 0, grid.Columns[ColTargets].Width, grid.Rows[row].Height);
+        }
+
         private Rectangle IpTargetLine(Rectangle cell, int index, int count)
         {
             int top = cell.Top + (cell.Height - count * IpLineHeight) / 2 + index * IpLineHeight;
@@ -334,11 +368,26 @@ namespace GlyphFinder
 
         internal string IpAtCopyButton(JobEntry entry, Rectangle cell, Point cursor)
         {
+            return HitIp(entry, cell, cursor, true);
+        }
+
+        private string IpAtText(JobEntry entry, Rectangle cell, Point cursor)
+        {
+            // The empty target cell must also be editable.
+            return entry.Targets.Count == 0 ? "" : HitIp(entry, cell, cursor, false);
+        }
+
+        private string HitIp(JobEntry entry, Rectangle cell, Point cursor, bool copy)
+        {
             for (int i = 0; i < entry.Targets.Count; i++)
             {
                 Rectangle line = IpTargetLine(cell, i, entry.Targets.Count);
-                if (line.Width < IpCopySize) return null;
-                line.Width = Math.Min(line.Width, IpCopySpace);
+                if (copy)
+                {
+                    if (line.Width < IpCopySize) return null;
+                    line.Width = Math.Min(line.Width, IpCopySpace);
+                }
+                else line = Rectangle.FromLTRB(line.Left + IpCopySpace, line.Top, line.Right, line.Bottom);
                 if (line.Contains(cursor)) return entry.Targets[i];
             }
             return null;
@@ -458,7 +507,7 @@ namespace GlyphFinder
                         if (column == ColTargets && entry.Type.Targets == TargetKind.Ip && entry.Targets.Count > 0)
                         {
                             height = Math.Max(height, entry.Targets.Count * IpLineHeight + 14);
-                            row.Cells[column].ToolTipText = Translate("点每行的图标可复制单个 IP。", "Click a copy icon to copy one IP.") +
+                            row.Cells[column].ToolTipText = Translate("点图标复制单个 IP，双击 IP 文字修改。", "Click an icon to copy one IP. Double-click the IP text to edit.") +
                                 Environment.NewLine + text;
                             continue;
                         }
@@ -1156,7 +1205,7 @@ namespace GlyphFinder
             if (string.IsNullOrEmpty(text)) return;
             try
             {
-                Clipboard.SetText(text);
+                writeClipboard(text);
                 SetStatus(done);
             }
             catch (ExternalException)
