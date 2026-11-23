@@ -15,6 +15,7 @@ namespace GlyphFinder
         private readonly Label[] fieldLabels = new Label[TerminalPuzzle.FieldCount];
         private readonly Segmented[] fields = new Segmented[TerminalPuzzle.FieldCount];
         private readonly Segmented mismatch = new Segmented { Items = new[] { "0", "1", "2", "3", "4" } };
+        private readonly FlatButton onTop = new FlatButton { Kind = ButtonKind.Ghost, Checked = true, Margin = Padding.Empty };
         private readonly FlatButton useSuggestion = new FlatButton();
         private readonly FlatButton record = new FlatButton { Kind = ButtonKind.Primary, Icon = ButtonGlyph.Plus };
         private readonly FlatButton undo = new FlatButton(), reset = new FlatButton { Kind = ButtonKind.Ghost };
@@ -34,13 +35,14 @@ namespace GlyphFinder
             ClientSize = new Size(690, 510);
             MinimumSize = new Size(670, 530);
             StartPosition = FormStartPosition.Manual;
+            TopMost = onTop.Checked;
 
             var layout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(14, 10, 14, 10)
             };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 102));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 114));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 112));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -51,13 +53,15 @@ namespace GlyphFinder
             var suggested = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3 };
             suggested.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             suggested.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            suggested.RowStyles.Add(new RowStyle(SizeType.Absolute, 19));
+            suggested.RowStyles.Add(new RowStyle(SizeType.Absolute, 31));
             suggested.RowStyles.Add(new RowStyle(SizeType.Absolute, 31));
             suggested.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             recommendation.Font = largeMono;
             recommendation.ForeColor = Palette.Primary;
+            onTop.Anchor = AnchorStyles.Right;
             useSuggestion.Anchor = AnchorStyles.Right;
             suggested.Controls.Add(recommendationTitle, 0, 0);
+            suggested.Controls.Add(onTop, 1, 0);
             suggested.Controls.Add(recommendation, 0, 1);
             suggested.Controls.Add(useSuggestion, 1, 1);
             suggested.Controls.Add(guidance, 0, 2);
@@ -110,6 +114,7 @@ namespace GlyphFinder
             layout.Controls.Add(footer, 0, 4);
             AcceptButton = record;
 
+            onTop.Click += delegate { onTop.Checked = TopMost = !TopMost; };
             useSuggestion.Click += delegate { SetGuess(puzzle.Recommend()); mismatch.Focus(); };
             mismatch.SelectedIndexChanged += delegate { record.Enabled = !puzzle.Solved && mismatch.SelectedIndex >= 0; };
             record.Click += delegate
@@ -147,6 +152,7 @@ namespace GlyphFinder
             string[] names = language.Text("版本|方法|信道|加密", "Version|Method|Channel|Cipher").Split('|');
             for (int i = 0; i < fields.Length; i++) fields[i].AccessibleName = fieldLabels[i].Text = names[i];
             mismatch.AccessibleName = mismatchLabel.Text = language.Text("错误数", "Mismatched");
+            onTop.Text = language.Text("置顶", "Keep on top");
             useSuggestion.Text = language.Text("填入建议", "Use suggestion");
             record.Text = language.Text("记录反馈", "Record result");
             undo.Text = language.Text("撤销上次", "Undo");

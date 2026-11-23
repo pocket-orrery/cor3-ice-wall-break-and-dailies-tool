@@ -25,7 +25,7 @@ namespace GlyphFinder
     {
         internal const string GameName = "ICE WALL BREAK";
         internal const string ProductName = GameName + " Finder";
-        internal const string ReleaseVersion = "1.0.6";
+        internal const string ReleaseVersion = "1.0.7";
 
         [STAThread]
         private static void Main(string[] args)

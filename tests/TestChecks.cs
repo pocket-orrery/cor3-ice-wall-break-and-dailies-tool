@@ -486,6 +486,11 @@ internal static class TestChecks
             var mismatch = Field<Segmented>(window, "mismatch");
             var record = Field<FlatButton>(window, "record");
             var reset = Field<FlatButton>(window, "reset");
+            var onTop = Field<FlatButton>(window, "onTop");
+            Require(window.TopMost && onTop.Checked && onTop.Text == "Keep on top" &&
+                onTop.Parent.ClientRectangle.Contains(onTop.Bounds), "Terminal opens on top with a visible checked button");
+            onTop.PerformClick();
+            Require(!window.TopMost && !onTop.Checked, "the Terminal button disables always-on-top");
             Require(reset.Parent.ClientRectangle.Contains(reset.Bounds), "English terminal controls fit at the minimum width");
             Field<FlatButton>(window, "undo").PerformClick();
             Require(example.Trials.Count == 1 && mismatch.SelectedIndex == 1 && record.Enabled, "undo refills the removed trial for correction");
@@ -496,6 +501,9 @@ internal static class TestChecks
             Application.DoEvents();
             SaveWindow(window, Path.Combine(output, "ui-terminal-preview.png"));
             Require(window.Text == "终端入侵助手" && example.Trials.Count == 2, "language switching preserves the terminal round");
+            Require(onTop.Text == "置顶" && !window.TopMost && !onTop.Checked, "language switching preserves the Terminal pin state");
+            onTop.PerformClick();
+            Require(window.TopMost && onTop.Checked, "the Terminal button restores always-on-top");
             Require(reset.Parent.ClientRectangle.Contains(reset.Bounds),
                 "translated terminal controls fit (" + reset.Bounds + " inside " + reset.Parent.ClientRectangle + ")");
             reset.PerformClick();
