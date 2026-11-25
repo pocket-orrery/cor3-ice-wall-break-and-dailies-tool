@@ -98,10 +98,16 @@ namespace GlyphFinder
             return Recognize(image, (line, xScale, yScale) => (string)lineType.GetProperty("Text").GetValue(line, null));
         }
 
-        internal static List<string> RecognizeLogCrop(Bitmap image, float scale)
+        internal static List<string> RecognizeLogCrop(Bitmap image, float scale, bool enhanceContrast = false)
         {
             return Recognize(image, (line, xScale, yScale) => (string)lineType.GetProperty("Text").GetValue(line, null),
-                source => PrepareLogCrop(source, scale));
+                source => PrepareLogCrop(source, scale, enhanceContrast));
+        }
+
+        internal static List<string> RecognizeLogText(Bitmap image, float scale)
+        {
+            return Recognize(image, (line, xScale, yScale) => (string)lineType.GetProperty("Text").GetValue(line, null),
+                source => Prepare(source, scale));
         }
 
         public static List<OcrTextLine> RecognizeLines(Bitmap image)
@@ -181,25 +187,31 @@ namespace GlyphFinder
         }
 
         // The regular enlargement can make Windows OCR skip punctuation and digits in a small monospace timestamp.
-        private static Bitmap PrepareLogCrop(Bitmap source, float scale)
+        private static Bitmap PrepareLogCrop(Bitmap source, float scale, bool enhanceContrast)
         {
             const int margin = 8;
             scale = Math.Min(scale, Math.Min((float)(MaxDimension - 2 * margin) / source.Width,
                 (float)(MaxDimension - 2 * margin) / source.Height));
             int width = Math.Max(1, (int)(source.Width * scale)), height = Math.Max(1, (int)(source.Height * scale));
             var padded = new Bitmap(width + 2 * margin, height + 2 * margin, PixelFormat.Format32bppArgb);
+            using (Bitmap contrast = enhanceContrast ? Prepare(source, 1f, true) : null)
             using (Graphics g = Graphics.FromImage(padded))
             {
-                g.Clear(Color.Black);
+                g.Clear(enhanceContrast ? Color.White : Color.Black);
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                g.DrawImage(source, new Rectangle(margin, margin, width, height));
+                g.DrawImage(contrast ?? source, new Rectangle(margin, margin, width, height));
             }
             return padded;
         }
 
         // Dark text on white, with the game's scanline background removed and small text enlarged.
         public static Bitmap Prepare(Bitmap source)
+        {
+            return Prepare(source, source.Height < 900 ? 2.5f : 1.5f);
+        }
+
+        private static Bitmap Prepare(Bitmap source, float requestedScale, bool softContrast = false)
         {
             int w = source.Width, h = source.Height;
             var light = new byte[w * h];
@@ -224,6 +236,11 @@ namespace GlyphFinder
             int background = sorted[sorted.Length / 2];
             int top = Math.Max(background + 40, sorted[Math.Min(sorted.Length - 1, (int)(sorted.Length * .995))]);
             int floor = background + 18;
+            if (softContrast)
+            {
+                floor = background + 22;
+                top = Math.Max(top, floor + 90);
+            }
 
             var flat = new Bitmap(w, h, PixelFormat.Format32bppArgb);
             BitmapData output = flat.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
@@ -245,8 +262,7 @@ namespace GlyphFinder
             }
             finally { flat.UnlockBits(output); }
 
-            float scale = Math.Min(3f, Math.Min((float)MaxDimension / w, (float)MaxDimension / h));
-            scale = Math.Min(scale, h < 900 ? 2.5f : 1.5f);
+            float scale = Math.Min(requestedScale, Math.Min((float)MaxDimension / w, (float)MaxDimension / h));
             if (scale >= 1f && scale <= 1.05f) return flat;
             var large = new Bitmap(Math.Max(1, (int)(w * scale)), Math.Max(1, (int)(h * scale)), PixelFormat.Format32bppArgb);
             using (Graphics g = Graphics.FromImage(large))

@@ -40,16 +40,16 @@ namespace GlyphFinder
             this.image = image;
         }
 
-        public void Learn(Rectangle clockArea, string time, Rectangle bodyArea, string body)
+        public void Learn(Rectangle clockArea, string time, Rectangle bodyArea, string body, float clockPitch = 0)
         {
             if (time != null && time.Length == ClockPattern.Length)
-                LearnGlyphs(clockArea, time, true);
+                LearnGlyphs(clockArea, time, true, clockPitch);
             LearnGlyphs(bodyArea, string.Concat(body.Where(c => !char.IsWhiteSpace(c))), false);
         }
 
-        private void LearnGlyphs(Rectangle area, string text, bool includePunctuation)
+        private void LearnGlyphs(Rectangle area, string text, bool includePunctuation, float pitch = 0)
         {
-            List<Glyph> glyphs = ReadGlyphs(area);
+            List<Glyph> glyphs = ReadGlyphs(area, pitch);
             if (glyphs.Count != text.Length) return;
             for (int i = 0; i < glyphs.Count; i++)
             {
@@ -65,9 +65,9 @@ namespace GlyphFinder
             }
         }
 
-        public string Read(Rectangle clockArea)
+        public string Read(Rectangle clockArea, float pitch = 0)
         {
-            List<Glyph> glyphs = ReadGlyphs(clockArea);
+            List<Glyph> glyphs = ReadGlyphs(clockArea, pitch);
             if (glyphs.Count != ClockPattern.Length || examples.Count < 2) return null;
 
             char[] result = new char[ClockPattern.Length];
@@ -138,7 +138,7 @@ namespace GlyphFinder
             return sets;
         }
 
-        private List<Glyph> ReadGlyphs(Rectangle area)
+        private List<Glyph> ReadGlyphs(Rectangle area, float pitch = 0)
         {
             var glyphs = new List<Glyph>();
             if (area.Width <= 0 || area.Height <= 0) return glyphs;
@@ -162,7 +162,7 @@ namespace GlyphFinder
             int count = area.Width * area.Height;
             int background = Percentile(histogram, count / 2);
             int bright = Percentile(histogram, count * 95 / 100);
-            int threshold = background + Math.Max(14, (bright - background) / 4);
+            int threshold = background + (pitch > 0 ? 18 : Math.Max(14, (bright - background) / 4));
 
             // Keep a bright scanline from joining adjacent characters along the entire row.
             for (int y = 0; y < area.Height; y++)
@@ -171,6 +171,45 @@ namespace GlyphFinder
                 if (reduction <= 0) continue;
                 for (int x = 0; x < area.Width; x++)
                     pixels[y, x] = (byte)Math.Max(0, pixels[y, x] - reduction);
+            }
+
+            if (pitch > 0)
+            {
+                // At small sizes, antialiased edges sometimes touch between characters.
+                var boundary = new int[ClockPattern.Length + 1];
+                for (int index = 0; index < boundary.Length; index++)
+                {
+                    int nominal = Math.Min(area.Width, (int)Math.Round(index * pitch));
+                    boundary[index] = nominal;
+                    if (index == 0 || index == ClockPattern.Length) continue;
+                    int bestInk = int.MaxValue;
+                    for (int x = Math.Max(1, nominal - 1); x <= Math.Min(area.Width - 1, nominal + 2); x++)
+                    {
+                        int ink = 0;
+                        for (int y = 0; y < area.Height; y++)
+                            ink += Math.Max(0, pixels[y, x - 1] - threshold) + Math.Max(0, pixels[y, x] - threshold);
+                        if (ink > bestInk || (ink == bestInk && Math.Abs(x - nominal) >= Math.Abs(boundary[index] - nominal))) continue;
+                        bestInk = ink;
+                        boundary[index] = x;
+                    }
+                }
+                for (int index = 0; index < ClockPattern.Length; index++)
+                {
+                    int start = boundary[index], end = boundary[index + 1];
+                    int x0 = end, x1 = start, y0 = area.Height, y1 = -1;
+                    for (int y = 0; y < area.Height; y++)
+                    for (int x = start; x < end; x++)
+                    {
+                        if (pixels[y, x] < threshold) continue;
+                        x0 = Math.Min(x0, x);
+                        x1 = Math.Max(x1, x);
+                        y0 = Math.Min(y0, y);
+                        y1 = Math.Max(y1, y);
+                    }
+                    if (y1 < y0) break;
+                    glyphs.Add(Sample(pixels, threshold, Rectangle.FromLTRB(x0, y0, x1 + 1, y1 + 1)));
+                }
+                return glyphs;
             }
 
             // The monospace characters have empty columns between them, even inside a timestamp.

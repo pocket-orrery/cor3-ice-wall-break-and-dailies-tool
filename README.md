@@ -8,7 +8,7 @@ Tired of squinting at ICE WALL BREAK during your daily tasks on [cor3.gg](https:
 
 ## Quick start
 
-1. Run `ICE-WALL-BREAK-Finder-v1.0.7.exe`.
+1. Run `ICE-WALL-BREAK-Finder-v1.0.8.exe`.
 2. In the File Decryption minigame, choose **Select**. Frame the target pattern area on the left, then the entire triangular board on the right.
 3. Keep both areas visible. A yellow outline marks a unique full match. Blue outlines mark the current leading candidates.
 
@@ -59,7 +59,7 @@ Run `.\build.ps1` in PowerShell on Windows. The script runs the checks and puts 
 
 ### 快速开始
 
-1. 运行 `ICE-WALL-BREAK-Finder-v1.0.7.exe`。
+1. 运行 `ICE-WALL-BREAK-Finder-v1.0.8.exe`。
 2. 进入文件解密小游戏，点 **框选**，先圈住左侧目标图形显示区，再圈住右侧整个三角棋盘。
 3. 保持两块区域可见。黄框表示唯一的全匹配，蓝框表示当前领先的候选位置。
 
