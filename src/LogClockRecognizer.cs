@@ -94,6 +94,36 @@ namespace GlyphFinder
             return new string(result);
         }
 
+        // Check the punctuation before reading the six digits in isolation. A screenshot
+        // with different punctuation must still be checked against the game's time format.
+        public bool HasClockPunctuation(Rectangle area, float pitch)
+        {
+            List<Glyph> glyphs = ReadGlyphs(area, pitch);
+            return glyphs.Count == ClockPattern.Length &&
+                IsBracket(glyphs[0], 0) && IsBracket(glyphs[9], SampleWidth - 1) &&
+                IsColon(glyphs[3]) && IsColon(glyphs[6]);
+        }
+
+        private static bool IsBracket(Glyph glyph, int side)
+        {
+            if (glyph.Aspect > .58f) return false;
+            int other = SampleWidth - 1 - side;
+            float spine = Enumerable.Range(2, 8).Average(y => glyph.At(side, y));
+            float opening = Enumerable.Range(3, 6).Average(y => glyph.At(other, y));
+            float edges = Math.Min(Enumerable.Range(0, 3).Max(y => glyph.At(other, y)),
+                Enumerable.Range(SampleHeight - 3, 3).Max(y => glyph.At(other, y)));
+            return spine > .25f && opening < spine * .7f && edges > opening + .08f;
+        }
+
+        private static bool IsColon(Glyph glyph)
+        {
+            if (glyph.Aspect > .65f) return false;
+            var rows = Enumerable.Range(0, SampleHeight)
+                .Select(y => Enumerable.Range(0, SampleWidth).Max(x => glyph.At(x, y))).ToArray();
+            return rows.Take(4).Max() > .45f && rows.Skip(8).Max() > .45f &&
+                rows.Skip(4).Take(4).Min() < .35f;
+        }
+
         private char? ReadUnseenDigit(Glyph glyph, float screenDistance)
         {
             // Only accept an unseen digit if two different fonts agree and both are closer than any screen sample.

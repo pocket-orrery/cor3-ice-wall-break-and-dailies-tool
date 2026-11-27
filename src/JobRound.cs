@@ -94,7 +94,7 @@ namespace GlyphFinder
             @"(?<![\w.-])[\w-]+(?:\.[\w-]+)+(?![\w-])");
         private static readonly Regex OcrIpv4 = new Regex(
             @"(?<![\w.])(?:[0-9OoØøIl]{1,3}\.){3}[0-9OoØøIl]{1,3}(?!\w|\.\w)");
-        private static readonly Regex SectorServer = new Regex(@"(?:^|-)[NESW]\d{1,2}L\d{1,2}(?:$|[- ])");
+        private static readonly Regex SectorServer = new Regex(@"(?:^|-)[NESW]\d{1,2}(?:L\d{1,2}|ECP)(?:$|[- ])");
         private static readonly char[] Separators = { '\r', '\n', ',', ';', '，', '；', '、', '\t' };
 
         public readonly List<JobEntry> Entries = new List<JobEntry>();

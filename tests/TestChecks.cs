@@ -575,6 +575,14 @@ internal static class TestChecks
         }
         Require(JobRound.ReadCard(JobCatalog.Find("IP Cleanup"), new[] { "Access Grant" }, new[] { "172.20.35.11" }) == null,
             "a card without a server is not added");
+        var ecpInfo = new[] { "RM7-N2ECP", "Access Acquisition", "EXAMPLE-S01IS CORP", "REP", "72.0" };
+        var ecpTargets = new[] { "192.0.2.109", "198.51.100.41" };
+        JobType cleanup = JobCatalog.Find("IP Cleanup");
+        JobEntry ecp = JobRound.ReadCard(cleanup, ecpInfo, ecpTargets);
+        Require(ecp != null && ecp.Server == "RM7-N2ECP" && ecp.Access == JobAccess.Acquisition &&
+            ecp.Targets.SequenceEqual(ecpTargets), "an ECP server takes precedence over a provider with OCR digits");
+        Require(JobRound.ReadCard(cleanup, ecpInfo.Concat(new[] { "RM7-N2L3" }), ecpTargets) == null,
+            "two different sector servers remain ambiguous");
         using (var decryptCard = new Bitmap(1200, 420))
         {
             string title = "Decrypt & Extract";
@@ -1077,6 +1085,37 @@ internal static class TestChecks
                 "visual timestamp recovery does not replace a real parenthesis with a bracket");
             Require(recognizer.Read(area(5)) == null,
                 "visual timestamp recovery does not invent a timestamp for a blank area");
+        }
+
+        const int pitch = 7;
+        using (var image = new Bitmap(10 * pitch, 18))
+        using (Graphics graphics = Graphics.FromImage(image))
+        {
+            graphics.Clear(Color.FromArgb(18, 23, 29));
+            Brush ink = Brushes.LightSlateGray;
+            graphics.FillRectangle(ink, 1, 3, 1, 12);
+            graphics.FillRectangle(ink, 1, 3, 4, 1);
+            graphics.FillRectangle(ink, 1, 14, 4, 1);
+            graphics.FillRectangle(ink, 9 * pitch + 4, 3, 1, 12);
+            graphics.FillRectangle(ink, 9 * pitch + 1, 3, 4, 1);
+            graphics.FillRectangle(ink, 9 * pitch + 1, 14, 4, 1);
+            foreach (int cell in new[] { 1, 2, 4, 5, 7, 8 })
+                graphics.FillRectangle(ink, cell * pitch + 2, 4, 3, 10);
+            foreach (int cell in new[] { 3, 6 })
+            {
+                graphics.FillRectangle(ink, cell * pitch + 3, 6, 2, 2);
+                graphics.FillRectangle(ink, cell * pitch + 3, 10, 2, 2);
+            }
+            graphics.Flush();
+            var recognizer = new LogClockRecognizer(image);
+            var area = new Rectangle(Point.Empty, image.Size);
+            Require(recognizer.HasClockPunctuation(area, pitch), "small clock digits are separable when all punctuation is visible");
+
+            using (var background = new SolidBrush(Color.FromArgb(18, 23, 29)))
+                graphics.FillRectangle(background, 6 * pitch, 5, pitch, 8);
+            graphics.FillRectangle(ink, 6 * pitch + 1, 8, 5, 2);
+            graphics.Flush();
+            Require(!recognizer.HasClockPunctuation(area, pitch), "a dash in place of a colon blocks the small clock digit recovery");
         }
     }
 

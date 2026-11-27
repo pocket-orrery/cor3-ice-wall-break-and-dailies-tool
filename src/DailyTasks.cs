@@ -246,6 +246,7 @@ namespace GlyphFinder
         private static readonly Regex Timestamp = new Regex(@"^\[\s*(\d{1,2})\s*:\s*(\d{1,2})\s*:\s*(\d{1,2})\s*\]");
         private static readonly Regex ImportableLine = new Regex(@"^\[[0-9]+(?:[:.\-][0-9]+){2}\]\s+\S");
         private static readonly Regex FieldWithDamagedPunctuation = new Regex(@"(?<=\s)[\['/]\s*(sector|status)\s*[-—=]\s*(?=\w)");
+        private static readonly Regex LogBody = new Regex(@"^[A-Z][A-Z0-9-]*(?:\s+/[a-z]+=[A-Za-z0-9]+){1,2}$");
 
         // Check that OCR captured the timestamp and some log text. The validator checks the timestamp's format and range later.
         public static bool CanImport(string line)
@@ -264,26 +265,89 @@ namespace GlyphFinder
         {
             var clocks = new LogClockRecognizer(image);
             var lines = WindowsOcr.RecognizeLines(image).OrderBy(line => line.Bounds.Top).ToList();
+            lines = lines.Where(line => line.Text.IndexOf("SCAN LOGS OUTPUT", StringComparison.OrdinalIgnoreCase) < 0).ToList();
             var timestampStarts = lines.Where(line => line.Bounds.Height <= 14 &&
                     line.Text.Length > 0 && "[({".Contains(line.Text[0]) && Event.IsMatch(line.Text))
                 .Select(line => line.Bounds.Left).OrderBy(x => x).ToList();
             float? smallTextStart = timestampStarts.Count >= 2 ? (float?)timestampStarts[timestampStarts.Count / 2] : null;
-            var rows = lines
-                .Where(line => line.Text.IndexOf("SCAN LOGS OUTPUT", StringComparison.OrdinalIgnoreCase) < 0)
-                .Select(line => ReadLine(image, line, clocks, smallTextStart)).ToList();
+            var rows = lines.Select(line => ReadLine(image, line, clocks, smallTextStart)).ToList();
 
             var result = new List<string>();
-            foreach (CapturedLine row in rows)
+            float logStart, characterPitch;
+            bool hasSmallLayout = FindSmallLogLayout(lines, smallTextStart, out logStart, out characterPitch);
+            for (int i = 0; i < rows.Count; i++)
             {
+                CapturedLine row = rows[i];
                 string text = row.Text;
                 if (!row.ClockArea.IsEmpty)
                 {
                     string time = clocks.Read(row.ClockArea, row.ClockPitch);
                     if (time != null) text = time + " " + row.Body;
                 }
+                if (hasSmallLayout)
+                    text = RecoverSmallLog(image, lines[i], text, logStart, characterPitch, clocks);
                 result.Add(text);
             }
             return result;
+        }
+
+        private static bool FindSmallLogLayout(IEnumerable<OcrTextLine> lines, float? timestampStart,
+            out float start, out float characterPitch)
+        {
+            var starts = new List<float>();
+            var pitches = new List<float>();
+            foreach (OcrTextLine line in lines)
+            {
+                if (line.Bounds.Height > 14 || line.Bounds.IsEmpty) continue;
+                string text = LogValidator.FixOcr(line.Text);
+                Match type = Event.Match(text);
+                if (!type.Success) continue;
+                bool bodyOnly = type.Index == 0;
+                if (!bodyOnly && !"[({".Contains(text[0])) continue;
+                string body = Regex.Replace(text.Substring(type.Index), @"\s*([=/])\s*", "$1");
+                int length = body.Length + body.Count(c => c == '/') + (bodyOnly ? 0 : 11);
+                if (!body.Contains("sector") || !body.Contains("status")) continue;
+                float pitch = (line.Bounds.Width + 1f) / length;
+                if (pitch < 3f || pitch >= 8.5f) continue;
+                pitches.Add(pitch);
+                starts.Add(line.Bounds.Left - (bodyOnly ? 11 * pitch : 0));
+            }
+            // Windows OCR can omit every timestamp in a selection. Monospace bodies
+            // still let us infer where the timestamp column begins.
+            starts.Sort();
+            pitches.Sort();
+            start = characterPitch = 0;
+            if (starts.Count < 2) return false;
+            float medianStart = Math.Max(0, timestampStart ?? starts[starts.Count / 2]);
+            float medianPitch = pitches[pitches.Count / 2];
+            start = medianStart;
+            characterPitch = medianPitch;
+            return starts.Count(x => Math.Abs(x - medianStart) <= medianPitch) >= 2;
+        }
+
+        private static string RecoverSmallLog(Bitmap image, OcrTextLine detected, string text, float start, float pitch, LogClockRecognizer clocks)
+        {
+            if (detected.Bounds.IsEmpty || detected.Bounds.Height > 14 || detected.Bounds.Left < start - pitch ||
+                detected.Bounds.Left > start + 12 * pitch) return text;
+            Match time = Timestamp.Match(text);
+            if (!time.Success && CanImport(text)) return text;
+            string body = time.Success ? text.Substring(time.Length).TrimStart() : null;
+            if (body != null && LogBody.IsMatch(body)) return text;
+
+            int top = Math.Max(0, (int)Math.Floor(detected.Bounds.Top) - 3);
+            int bottom = Math.Min(image.Height, (int)Math.Ceiling(detected.Bounds.Bottom) + 3);
+            int fieldStart = (int)Math.Round(start + 10.5f * pitch);
+            if (fieldStart >= image.Width || top >= bottom) return text;
+            var row = Rectangle.FromLTRB(0, top, image.Width, bottom);
+            string clock = time.Success ? time.Value : ReadSmallDigits(image, row, start, pitch, clocks);
+            if (clock == null) return text;
+            string reread = ReadSmallBody(image, Rectangle.FromLTRB(fieldStart, top, row.Right, bottom), true);
+            if (reread != null && new[] { "sector", "status" }.All(field =>
+                !text.Contains(field) || reread.Contains(field))) return clock + " " + reread;
+            if (body != null) return text;
+            Match type = Event.Match(text);
+            // Keep a recovered timestamp only when the rest of the row also has a complete OCR reading.
+            return type.Success && LogBody.IsMatch(text.Substring(type.Index)) ? clock + " " + text.Substring(type.Index) : text;
         }
 
         private static CapturedLine ReadLine(Bitmap image, OcrTextLine line, LogClockRecognizer clocks, float? smallTextStart)
@@ -324,7 +388,7 @@ namespace GlyphFinder
                 var bodyArea = Rectangle.FromLTRB(fieldStart, top, row.Right, bottom);
                 using (Bitmap crop = image.Clone(bodyArea, PixelFormat.Format32bppArgb))
                 {
-                    if (WindowsOcr.Recognize(crop).Concat(new[] { 1f, 1.25f, 1.5f }.SelectMany(scale => WindowsOcr.RecognizeLogCrop(crop, scale)))
+                    if (WindowsOcr.Recognize(crop).Concat(new[] { 1f, 1.25f, 1.5f }.SelectMany(scale => WindowsOcr.RecognizeCrop(crop, scale)))
                         .Select(LogValidator.FixOcr).Contains(comparable))
                     {
                         text = text.Substring(0, type.Index) + comparable;
@@ -373,8 +437,8 @@ namespace GlyphFinder
             if (area.Width <= 0 || area.Height <= 0) return null;
             using (Bitmap crop = image.Clone(area, PixelFormat.Format32bppArgb))
             {
-                string time = ReadTimestamp(WindowsOcr.RecognizeLogCrop(crop, 3.5f), true)
-                    ?? ReadTimestamp(WindowsOcr.RecognizeLogCrop(crop, 3f, true), true);
+                string time = ReadTimestamp(WindowsOcr.RecognizeCrop(crop, 3.5f), true)
+                    ?? ReadTimestamp(WindowsOcr.RecognizeCrop(crop, 3f, true), true);
                 if (time != null) return time;
                 foreach (float scale in new[] { 3f, 2.5f, 2f })
                 {
@@ -383,6 +447,48 @@ namespace GlyphFinder
                 }
             }
             return null;
+        }
+
+        private static string ReadSmallDigits(Bitmap image, Rectangle row, float start, float pitch, LogClockRecognizer clocks)
+        {
+            int left = Math.Max(0, (int)Math.Round(start - .1f * pitch));
+            foreach (int adjustment in new[] { 0, -1, 1, -2 })
+            {
+                foreach (float adjustedPitch in new[] { pitch, pitch + .17f })
+                {
+                    var clock = new Rectangle(left + adjustment, row.Top, (int)Math.Round(10 * adjustedPitch), row.Height);
+                    if (clock.Left < 0 || clock.Right > row.Right || !clocks.HasClockPunctuation(clock, adjustedPitch)) continue;
+                    string digits = ReadClockDigits(image, clock, adjustedPitch);
+                    if (digits != null)
+                        return "[" + digits.Substring(0, 2) + ":" + digits.Substring(2, 2) + ":" + digits.Substring(4, 2) + "]";
+                }
+            }
+            return null;
+        }
+
+        private static string ReadClockDigits(Bitmap image, Rectangle clock, float pitch)
+        {
+            // Keep the digit pixels at their original height. Without punctuation between
+            // them, OCR can recover faint digits that it skipped in the whole clock.
+            int[] cells = { 1, 2, 4, 5, 7, 8 };
+            using (var digits = new Bitmap((int)Math.Round(6 * pitch) + 6, clock.Height + 6, PixelFormat.Format32bppArgb))
+            using (Graphics graphics = Graphics.FromImage(digits))
+            {
+                for (int i = 0; i < cells.Length; i++)
+                {
+                    int a = (int)Math.Round(cells[i] * pitch), b = (int)Math.Round((cells[i] + 1) * pitch);
+                    var source = new Rectangle(clock.Left + a, clock.Top, b - a, clock.Height);
+                    using (Bitmap cell = image.Clone(source, PixelFormat.Format32bppArgb))
+                        graphics.DrawImageUnscaled(cell, (int)Math.Round(i * pitch) + 3, 3);
+                }
+                graphics.Flush();
+                var reads = new[] { WindowsOcr.RecognizeCrop(digits, 2f), WindowsOcr.RecognizeCrop(digits, 3f),
+                        WindowsOcr.RecognizeCrop(digits, 4f), WindowsOcr.RecognizeCrop(digits, 4f, true) }
+                    .SelectMany(lines => lines.Select(text => text.Replace(" ", "")).Distinct())
+                    .Where(text => Regex.IsMatch(text, @"^[0-9]{6}$"))
+                    .GroupBy(text => text).ToArray();
+                return reads.Length == 1 && reads[0].Count() >= 2 ? reads[0].Key : null;
+            }
         }
 
         private static Rectangle SmallClockBounds(Bitmap image, Rectangle row, float start, float pitch)
@@ -407,12 +513,20 @@ namespace GlyphFinder
                 Math.Min(row.Right, left + (int)Math.Round(10.5f * pitch)), Math.Min(row.Bottom, center + inset + 1));
         }
 
-        private static string ReadSmallBody(Bitmap image, Rectangle bodyArea)
+        private static string ReadSmallBody(Bitmap image, Rectangle bodyArea, bool structured = false)
         {
             using (Bitmap crop = image.Clone(bodyArea, PixelFormat.Format32bppArgb))
             {
-                var plain = WindowsOcr.RecognizeLogCrop(crop, 2.5f).Select(LogValidator.FixOcr);
-                var contrast = WindowsOcr.RecognizeLogText(crop, 3f).Select(LogValidator.FixOcr);
+                var plain = WindowsOcr.RecognizeCrop(crop, 2.5f).Select(LogValidator.FixOcr).ToList();
+                var contrast = WindowsOcr.RecognizeLogText(crop, 3f).Select(LogValidator.FixOcr).ToList();
+                if (structured)
+                {
+                    var larger = WindowsOcr.RecognizeCrop(crop, 4f).Select(LogValidator.FixOcr);
+                    var between = WindowsOcr.RecognizeCrop(crop, 3.5f).Select(LogValidator.FixOcr);
+                    var accepted = new[] { plain, contrast, larger, between }.SelectMany(lines => lines.Distinct())
+                        .Where(line => LogBody.IsMatch(line)).GroupBy(line => line).Where(group => group.Count() >= 2).ToArray();
+                    return accepted.Length == 1 ? accepted[0].Key : null;
+                }
                 foreach (string text in plain.Intersect(contrast))
                 {
                     Match type = Event.Match(text);
@@ -446,7 +560,7 @@ namespace GlyphFinder
         {
             if (area.Width <= 0 || area.Height <= 0) return null;
             using (Bitmap crop = image.Clone(area, PixelFormat.Format32bppArgb))
-                return ReadTimestamp(WindowsOcr.RecognizeLogCrop(crop, scale), false);
+                return ReadTimestamp(WindowsOcr.RecognizeCrop(crop, scale), false);
         }
 
         private static string ReadTimestamp(IEnumerable<string> lines, bool normalize)

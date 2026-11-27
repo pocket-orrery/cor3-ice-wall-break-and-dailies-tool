@@ -98,10 +98,10 @@ namespace GlyphFinder
             return Recognize(image, (line, xScale, yScale) => (string)lineType.GetProperty("Text").GetValue(line, null));
         }
 
-        internal static List<string> RecognizeLogCrop(Bitmap image, float scale, bool enhanceContrast = false)
+        internal static List<string> RecognizeCrop(Bitmap image, float scale, bool enhanceContrast = false)
         {
             return Recognize(image, (line, xScale, yScale) => (string)lineType.GetProperty("Text").GetValue(line, null),
-                source => PrepareLogCrop(source, scale, enhanceContrast));
+                source => PrepareCrop(source, scale, enhanceContrast));
         }
 
         internal static List<string> RecognizeLogText(Bitmap image, float scale)
@@ -186,13 +186,14 @@ namespace GlyphFinder
             }
         }
 
-        // The regular enlargement can make Windows OCR skip punctuation and digits in a small monospace timestamp.
-        private static Bitmap PrepareLogCrop(Bitmap source, float scale, bool enhanceContrast)
+        // Padding keeps text near a crop edge from being dropped by the OCR engine.
+        private static Bitmap PrepareCrop(Bitmap source, float scale, bool enhanceContrast)
         {
             const int margin = 8;
             scale = Math.Min(scale, Math.Min((float)(MaxDimension - 2 * margin) / source.Width,
                 (float)(MaxDimension - 2 * margin) / source.Height));
-            int width = Math.Max(1, (int)(source.Width * scale)), height = Math.Max(1, (int)(source.Height * scale));
+            int width = Math.Max(1, (int)(source.Width * scale));
+            int height = Math.Max(1, (int)(source.Height * scale));
             var padded = new Bitmap(width + 2 * margin, height + 2 * margin, PixelFormat.Format32bppArgb);
             using (Bitmap contrast = enhanceContrast ? Prepare(source, 1f, true) : null)
             using (Graphics g = Graphics.FromImage(padded))

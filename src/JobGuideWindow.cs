@@ -85,7 +85,7 @@ namespace GlyphFinder
             this.language = language;
             this.round = round;
             this.pickImage = pickImage;
-            this.recognize = recognize ?? WindowsOcr.Recognize;
+            this.recognize = recognize;
             this.recognizeLines = recognizeLines ?? (recognize == null
                 ? (Func<Bitmap, List<OcrTextLine>>)WindowsOcr.RecognizeLines : null);
             this.writeClipboard = writeClipboard ?? Clipboard.SetText;
@@ -765,7 +765,22 @@ namespace GlyphFinder
         {
             TargetKind kind = JobCatalog.Types[typeIndex].Targets;
             return ReadImage("框住任务详情里的 IP 或名称", "Select the IP addresses or names in the job details.",
-                image => AddDraftTargets(JobRound.ExtractTargets(recognize(image), kind), kind));
+                image => AddDraftTargets(RecognizeTargets(image, kind, recognize), kind));
+        }
+
+        internal static List<string> RecognizeTargets(Bitmap image, TargetKind kind, Func<Bitmap, List<string>> recognize = null)
+        {
+            if (recognize != null) return JobRound.ExtractTargets(recognize(image), kind);
+
+            // Short crops can lose the first digit of an IP or the underscore in a filename
+            // when the contrast pass erases faint pixels. Start with a padded color image.
+            var targets = JobRound.ExtractTargets(WindowsOcr.RecognizeCrop(image, kind == TargetKind.File ? 1.5f : 2f), kind);
+            if (kind == TargetKind.Ip)
+            {
+                var alternate = JobRound.ExtractTargets(WindowsOcr.RecognizeCrop(image, 1.25f), kind);
+                if (alternate.Count > targets.Count && targets.All(alternate.Contains)) return alternate;
+            }
+            return targets.Count > 0 ? targets : JobRound.ExtractTargets(WindowsOcr.Recognize(image), kind);
         }
 
         private void AddDraftTargets(List<string> found, TargetKind kind)
@@ -861,7 +876,12 @@ namespace GlyphFinder
             int splitY = image.Height / 3;
             JobType type;
             using (Bitmap heading = image.Clone(new Rectangle(0, 0, image.Width * 3 / 4, splitY), PixelFormat.Format32bppArgb))
-                type = JobRound.IdentifyCardType(recognize(heading));
+            {
+                type = recognize != null ? JobRound.IdentifyCardType(recognize(heading))
+                    : JobRound.IdentifyCardType(WindowsOcr.RecognizeCrop(heading, 2f))
+                        ?? JobRound.IdentifyCardType(WindowsOcr.RecognizeCrop(heading, 2.5f))
+                        ?? JobRound.IdentifyCardType(WindowsOcr.Recognize(heading));
+            }
             if (type == null) return null;
             return RecognizeCardBody(image, type, recognize);
         }
@@ -879,7 +899,12 @@ namespace GlyphFinder
             using (Bitmap info = image.Clone(new Rectangle(valuesX, splitY, splitX - valuesX, image.Height - splitY), PixelFormat.Format32bppArgb))
             using (Bitmap description = image.Clone(new Rectangle(splitX, descriptionTop, image.Width - splitX,
                 descriptionBottom - descriptionTop), PixelFormat.Format32bppArgb))
-                return JobRound.ReadCard(type, recognize(info), recognize(description));
+            {
+                if (recognize != null) return JobRound.ReadCard(type, recognize(info), recognize(description));
+                return JobRound.ReadCard(type, WindowsOcr.RecognizeCrop(info, 2f), WindowsOcr.RecognizeCrop(description, 2f))
+                    ?? JobRound.ReadCard(type, WindowsOcr.RecognizeCrop(info, 2.5f), WindowsOcr.RecognizeCrop(description, 2.5f))
+                    ?? JobRound.ReadCard(type, WindowsOcr.Recognize(info), WindowsOcr.Recognize(description));
+            }
         }
 
         private static int FindCardDivider(Bitmap image, int bodyTop)
