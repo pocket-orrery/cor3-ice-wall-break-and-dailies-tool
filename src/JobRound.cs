@@ -94,6 +94,9 @@ namespace GlyphFinder
             @"(?<![\w.-])[\w-]+(?:\.[\w-]+)+(?![\w-])");
         private static readonly Regex OcrIpv4 = new Regex(
             @"(?<![\w.])(?:[0-9OoØøIl]{1,3}\.){3}[0-9OoØøIl]{1,3}(?!\w|\.\w)");
+        // Accept more digit lookalikes when the selected target type is explicitly IPv4.
+        private static readonly Regex ScreenshotIpv4 = new Regex(
+            @"(?<![\w.])(?=[0-9OoØøIliBSs.]*[0-9])(?:[0-9OoØøIliBSs]{1,3}\.){3}[0-9OoØøIliBSs]{1,3}(?!\w|\.\w)");
         private static readonly Regex SectorServer = new Regex(@"(?:^|-)[NESW]\d{1,2}(?:L\d{1,2}|ECP)(?:$|[- ])");
         private static readonly char[] Separators = { '\r', '\n', ',', ';', '，', '；', '、', '\t' };
 
@@ -177,9 +180,10 @@ namespace GlyphFinder
                 // OCR can leave a space around the dot in an IP address or extension.
                 string text = Regex.Replace(line, @"(?<=\w)\s*[.．。]\s*(?=\w)", ".");
                 if (kind == TargetKind.Ip)
-                    return OcrIpv4.Matches(text).Cast<Match>()
+                    return ScreenshotIpv4.Matches(text).Cast<Match>()
                         .Select(match => match.Value.Replace('O', '0').Replace('o', '0').Replace('Ø', '0').Replace('ø', '0')
-                            .Replace('I', '1').Replace('l', '1'))
+                            .Replace('I', '1').Replace('l', '1').Replace('i', '1')
+                            .Replace('B', '8').Replace('S', '5').Replace('s', '5'))
                         .Where(address => Ipv4.Match(address).Length == address.Length);
                 return FileName.Matches(text).Cast<Match>().Select(match => match.Value)
                     .Where(name => name.Any(char.IsLetter) && !OcrIpv4.IsMatch(name));
@@ -235,6 +239,8 @@ namespace GlyphFinder
         {
             string server = Regex.Replace(line.Trim(), @"^(?:servers?\b|服务器)\s*[:：]?\s*", "", RegexOptions.IgnoreCase);
             server = Regex.Replace(server.ToUpperInvariant(), @"\s*[-–—]\s*", "-");
+            // At small sizes the dash before a directional sector can look like a dot.
+            server = Regex.Replace(server, @"(?<=[A-Z0-9])\s*\.\s*(?=[NESW][0-9IO]{1,2}(?:L[0-9IOS]{1,2}|ECP)(?:$|[- ]))", "-");
             if (server.Length > 40 || !Regex.IsMatch(server, @"^[A-Z0-9]+(?:[ -][A-Z0-9]+)*$") ||
                 !server.Any(char.IsDigit) || !server.Any(char.IsLetter) || Regex.IsMatch(server, @"^CR\s*[0-9]+$")) return null;
             // The characters around L in a directional sector are digits, e.g. E1LS is E1L5.

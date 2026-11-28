@@ -583,6 +583,14 @@ internal static class TestChecks
             ecp.Targets.SequenceEqual(ecpTargets), "an ECP server takes precedence over a provider with OCR digits");
         Require(JobRound.ReadCard(cleanup, ecpInfo.Concat(new[] { "RM7-N2L3" }), ecpTargets) == null,
             "two different sector servers remain ambiguous");
+        JobEntry smallIpCard = JobRound.ReadCard(cleanup, new[] { "RM7.S4L3", "Access Acquisition" }, new[]
+        {
+            "192.0.2.23B", "198.S1.iOO.41", "203.0.113.13s",
+            "192.0.2.2S6", "archive.192.0.2.23B", "B.S.S.i"
+        });
+        Require(smallIpCard != null && smallIpCard.Server == "RM7-S4L3" && smallIpCard.Access == JobAccess.Acquisition &&
+            smallIpCard.Targets.SequenceEqual(new[] { "192.0.2.238", "198.51.100.41", "203.0.113.135" }),
+            "small IP cards repair OCR lookalikes without accepting invalid octets or dotted names");
         using (var decryptCard = new Bitmap(1200, 420))
         {
             string title = "Decrypt & Extract";
